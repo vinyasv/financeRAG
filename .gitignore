@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# Environment
+.env
+.env.*
+
+# Data & Documents
+data/
+*.pdf
+*.csv
+*.xlsx
+*.xls
+
+# Evaluation results
+*_results.json
+*_results.md
+*_review.md
+
+# Exports
+*.pdf
+results*.csv
+report*.pdf
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

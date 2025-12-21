@@ -1,0 +1,31 @@
+# Core dependencies
+pydantic>=2.0.0
+pydantic-ai>=0.0.12
+
+# PDF Processing
+pdfplumber>=0.10.0
+PyMuPDF>=1.23.0
+thepipe-api>=1.7.0
+
+# Vector Database
+chromadb>=0.4.0
+
+# Embeddings (local, free)
+sentence-transformers>=2.2.0
+
+# Database
+# SQLite is built-in to Python
+
+# Async support
+aiohttp>=3.9.0
+asyncio>=3.4.3
+
+# LLM providers (optional - install as needed)
+openai>=1.0.0
+anthropic>=0.18.0
+
+# Utilities
+python-dotenv>=1.0.0
+rich>=13.0.0  # For nice CLI output
+
+fpdf2
