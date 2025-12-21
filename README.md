@@ -1,59 +1,59 @@
-# UltimateRAG 🚀
+# Finance RAG
 
 A high-performance RAG (Retrieval Augmented Generation) system designed for financial documents. Extracts structured data from PDFs, enables semantic search, and provides accurate answers to complex queries using parallel tool execution.
 
-## ✨ Key Features
+## Key Features
 
-### **Parallel Execution**
+### Parallel Execution
 - Independent tool calls run simultaneously for maximum speed
 - DAG-based execution planning with dependency resolution
 - Real-time execution monitoring with per-step timing
 
-### **Smart Table Extraction**
+### Smart Table Extraction
 - **Vision-based extraction**: Uses VLMs via `thepipe` for 5-6x faster, more accurate table parsing
 - **Fallback rule-based extraction**: Works without API keys using `pdfplumber`
 - **Schema enhancement**: LLM-powered column and table name normalization
 
-### **FlashRank Reranking**
+### FlashRank Reranking
 - Ultra-fast reranking (~10-50ms latency) using distilled T5 models
 - Hybrid scoring combining vector similarity + reranker scores
 - Dramatically improved retrieval precision over pure embedding search
 
-### **Flexible Embeddings**
+### Flexible Embeddings
 - **OpenRouter**: Qwen3-8B, OpenAI, Cohere, Google embeddings via single API key
 - **Local**: Free sentence-transformers (BGE-large, all-MiniLM-L6-v2)
 - Auto-detection based on available API keys
 
-### **Deterministic Calculations**
+### Deterministic Calculations
 - Calculator tool for safe arithmetic evaluation
 - Avoids LLM hallucination on numerical computations
 - Supports complex expressions with percentages and unit conversions
 
-### **Batch Processing & Export**
+### Batch Processing & Export
 - **Batch folder ingestion**: Recursively ingest entire directories with progress bar
 - **Export to PDF/CSV/JSON**: Generate professional reports from query results
 - **Accurate citations**: Shows filename, page number, and line references
 
-### **Multi-Provider LLM Support**
+### Multi-Provider LLM Support
 - **OpenRouter** (recommended): Single API key for all models
 - **Direct APIs**: OpenAI, Anthropic
 - **Model shortcuts**: `gpt-4o`, `claude-sonnet`, `gemini-flash`, `llama-70b`, etc.
 
-## 🏗️ Architecture
+## Architecture
 
 ```
-Query → Planner (1 LLM call) → Execution DAG → Parallel Tool Calls → Synthesize Response
-                                    ↓
-                    ┌───────────────┼───────────────┐
-                    ↓               ↓               ↓
+Query -> Planner (1 LLM call) -> Execution DAG -> Parallel Tool Calls -> Synthesize Response
+                                    |
+                    +---------------+---------------+
+                    |               |               |
               SQL Query      Vector Search    Calculator
-                    ↓               ↓               ↓
-                    └───────────────┴───────────────┘
-                                    ↓
+                    |               |               |
+                    +---------------+---------------+
+                                    |
                             Response Synthesis
 ```
 
-## 🛠️ Tools
+## Tools
 
 | Tool | Purpose |
 |------|---------|
@@ -62,7 +62,7 @@ Query → Planner (1 LLM call) → Execution DAG → Parallel Tool Calls → Syn
 | `calculator` | Safe deterministic math expression evaluation |
 | `get_document` | Retrieve full document or section content |
 
-## 📦 Installation
+## Installation
 
 ```bash
 # Create virtual environment
@@ -80,7 +80,7 @@ cp env.example .env
 # Edit .env with your API keys
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 Create a `.env` file in the project root:
 
@@ -113,7 +113,7 @@ OPENROUTER_API_KEY=your-key-here  # Get at https://openrouter.ai/keys
 # EMBEDDING_PROVIDER=local                   # Force local embeddings
 ```
 
-## 🚀 Usage
+## Usage
 
 ### Ingest Documents
 
@@ -167,10 +167,10 @@ Query: stats    # Show knowledge base statistics
 Query: models   # List available LLM models
 ```
 
-## 📁 Project Structure
+## Project Structure
 
 ```
-ultimateRAG/
+financeRAG/
 ├── src/
 │   ├── agent/
 │   │   ├── planner.py        # Query planning with LLM
@@ -208,7 +208,7 @@ ultimateRAG/
 └── env.example               # Configuration template
 ```
 
-## 📊 Performance
+## Performance
 
 | Operation | Typical Latency |
 |-----------|----------------|
@@ -219,7 +219,7 @@ ultimateRAG/
 | Response Synthesis | ~300-800ms |
 | **Total Query** | **~500-1500ms** |
 
-## 🧪 Example Queries
+## Example Queries
 
 ```
 # Financial analysis
@@ -236,7 +236,7 @@ ultimateRAG/
 "Calculate the YoY growth rate for each quarter"
 ```
 
-## 🔧 Advanced Configuration
+## Advanced Configuration
 
 ### ChromaDB HNSW Parameters
 
@@ -263,7 +263,7 @@ reranker = Reranker(model_name="rank-T5-flan")
 reranker = Reranker(model_name="rank_zephyr_7b_v1_full")
 ```
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please ensure tests pass before submitting PRs.
 
@@ -272,11 +272,11 @@ Contributions are welcome! Please ensure tests pass before submitting PRs.
 pytest tests/
 ```
 
-## 📄 License
+## License
 
 MIT
 
-## 🙏 Acknowledgements
+## Acknowledgements
 
 - [ChromaDB](https://www.trychroma.com/) - Vector database
 - [FlashRank](https://github.com/PrithivirajDamodaran/FlashRank) - Ultra-fast reranking
