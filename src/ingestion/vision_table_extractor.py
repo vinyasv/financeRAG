@@ -252,7 +252,7 @@ class VisionTableExtractor:
             return None
         
         # Generate table ID and name
-        table_id = hashlib.md5(
+        table_id = hashlib.sha256(
             f"{document_id}:{page_number}:{table_index}:{':'.join(columns[:5])}".encode()
         ).hexdigest()[:16]
         

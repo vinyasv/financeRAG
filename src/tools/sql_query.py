@@ -5,7 +5,7 @@ import json
 
 from .base import Tool
 from ..models import ToolName, SQLQueryResult
-from ..storage.sqlite_store import SQLiteStore
+from ..storage.sqlite_store import SQLiteStore, SecurityError
 
 
 # Prompt for converting natural language to SQL
@@ -96,8 +96,12 @@ class SQLQueryTool(Tool):
                 "row_count": len(rows)
             }
             
+        except SecurityError as e:
+            # Security violation - return sanitized error without SQL details
+            return {"error": f"Query not allowed: {str(e)}"}
         except Exception as e:
-            return {"error": str(e), "sql": sql}
+            # Other errors - log internally but don't expose SQL to response
+            return {"error": "Query execution failed. Please try rephrasing your question."}
     
     async def _generate_sql(self, query: str) -> str:
         """Convert natural language to SQL."""

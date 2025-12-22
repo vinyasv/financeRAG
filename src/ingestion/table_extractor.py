@@ -186,7 +186,7 @@ class TableExtractor:
     def _generate_table_id(self, document_id: str, page_number: int, columns: list[str]) -> str:
         """Generate a unique table ID."""
         content = f"{document_id}:{page_number}:{':'.join(columns)}"
-        return hashlib.md5(content.encode()).hexdigest()[:16]
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
     
     def _generate_table_name(self, columns: list[str], page_number: int) -> str:
         """Generate a descriptive table name."""

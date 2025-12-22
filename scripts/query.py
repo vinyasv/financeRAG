@@ -6,6 +6,7 @@ import asyncio
 import argparse
 import csv
 import json
+import logging
 from pathlib import Path
 from datetime import datetime
 
@@ -16,6 +17,44 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.config import config
 from src.rag_agent import RAGAgent
 from src.llm_client import get_llm_client, OpenRouterClient
+from src.security import MAX_QUERY_LENGTH, detect_injection_attempt
+
+# Configure logging (filter sensitive data)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('query.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Silence noisy loggers
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('chromadb').setLevel(logging.WARNING)
+
+
+def validate_query_input(query: str) -> tuple[bool, str]:
+    """
+    Validate user query input.
+    
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not query or not query.strip():
+        return False, "Query cannot be empty"
+    
+    if len(query) > MAX_QUERY_LENGTH:
+        return False, f"Query too long ({len(query)} chars). Maximum: {MAX_QUERY_LENGTH}"
+    
+    # Log potential injection attempts (but don't block - might be false positive)
+    is_suspicious, patterns = detect_injection_attempt(query)
+    if is_suspicious:
+        logger.warning(f"Potential injection attempt detected. Query length: {len(query)}")
+        # Note: We don't log the actual query content for privacy
+    
+    return True, ""
 
 
 def parse_args():
@@ -189,6 +228,12 @@ async def interactive_mode(agent: RAGAgent, model_name: str | None):
         if not query:
             continue
         
+        # Validate query
+        is_valid, error_msg = validate_query_input(query)
+        if not is_valid:
+            print(f"⚠️ {error_msg}")
+            continue
+        
         if query.lower() in ('quit', 'exit', 'q'):
             print("Goodbye!")
             break
@@ -223,7 +268,15 @@ async def interactive_mode(agent: RAGAgent, model_name: str | None):
 
 
 async def single_query(agent: RAGAgent, query: str, verbose: bool = False, output_path: Path | None = None):
-    """Run a single query."""
+    """Run a single query with input validation."""
+    # Validate query
+    is_valid, error_msg = validate_query_input(query)
+    if not is_valid:
+        print(f"⚠️ {error_msg}")
+        return
+    
+    logger.info(f"Processing query of length {len(query)} chars")
+    
     response = await agent.query(query, verbose=verbose)
     
     print("\nAnswer:")

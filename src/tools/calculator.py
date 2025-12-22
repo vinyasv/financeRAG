@@ -107,8 +107,18 @@ class CalculatorTool(Tool):
         except SyntaxError as e:
             raise ValueError(f"Invalid expression: {expression}") from e
     
-    def _eval_node(self, node: ast.AST) -> float:
-        """Recursively evaluate an AST node."""
+    # Maximum depth for expression evaluation (DoS protection)
+    MAX_AST_DEPTH = 50
+    
+    def _eval_node(self, node: ast.AST, depth: int = 0) -> float:
+        """
+        Recursively evaluate an AST node with depth limiting.
+        
+        Security: Limits recursion depth to prevent stack overflow from
+        maliciously deeply nested expressions.
+        """
+        if depth > self.MAX_AST_DEPTH:
+            raise ValueError(f"Expression too deeply nested (max {self.MAX_AST_DEPTH} levels)")
         
         # Numeric constant
         if isinstance(node, ast.Constant):
@@ -119,8 +129,8 @@ class CalculatorTool(Tool):
         
         # Binary operation: left op right
         elif isinstance(node, ast.BinOp):
-            left = self._eval_node(node.left)
-            right = self._eval_node(node.right)
+            left = self._eval_node(node.left, depth + 1)
+            right = self._eval_node(node.right, depth + 1)
             
             op_type = type(node.op)
             if op_type not in self.SAFE_OPERATORS:
@@ -136,7 +146,7 @@ class CalculatorTool(Tool):
         
         # Unary operation: -x or +x
         elif isinstance(node, ast.UnaryOp):
-            operand = self._eval_node(node.operand)
+            operand = self._eval_node(node.operand, depth + 1)
             
             op_type = type(node.op)
             if op_type not in self.SAFE_OPERATORS:
@@ -146,7 +156,7 @@ class CalculatorTool(Tool):
         
         # Parenthesized expression
         elif isinstance(node, ast.Expression):
-            return self._eval_node(node.body)
+            return self._eval_node(node.body, depth + 1)
         
         else:
             raise ValueError(f"Unsupported expression type: {type(node).__name__}")

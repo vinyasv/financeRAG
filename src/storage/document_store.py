@@ -1,12 +1,91 @@
 """Document store for full document content and metadata."""
 
 import json
+import logging
+import re
 from pathlib import Path
 from typing import Any
 import shutil
 
 from ..models import Document, TextChunk
 from ..config import config
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Security: Path Traversal Protection
+# =============================================================================
+
+class PathSecurityError(Exception):
+    """Raised when a path security violation is detected."""
+    pass
+
+
+def secure_path_join(base_path: Path, untrusted_path: str) -> Path:
+    """
+    Safely join a base path with an untrusted filename.
+    
+    This prevents path traversal attacks by:
+    1. Extracting only the filename (stripping directory components)
+    2. Removing dangerous characters
+    3. Validating the result stays within base_path
+    
+    Args:
+        base_path: The trusted base directory
+        untrusted_path: The untrusted filename from user input
+        
+    Returns:
+        A safe Path object within base_path
+        
+    Raises:
+        PathSecurityError: If the path is unsafe
+    """
+    if not untrusted_path:
+        raise PathSecurityError("Empty path not allowed")
+    
+    # Extract just the filename, removing any directory components
+    safe_name = Path(untrusted_path).name
+    
+    # Check for null bytes
+    if '\x00' in safe_name:
+        raise PathSecurityError("Null byte in filename")
+    
+    # Remove any remaining traversal patterns
+    if '..' in safe_name:
+        safe_name = safe_name.replace('..', '_')
+    
+    # Sanitize: only allow alphanumeric, hyphens, underscores, dots, spaces
+    # This is strict but safe for document filenames
+    if not re.match(r'^[\w\-. ]+$', safe_name):
+        # Create a sanitized version
+        safe_name = re.sub(r'[^\w\-. ]', '_', safe_name)
+    
+    if not safe_name or safe_name in ('.', '..'):
+        raise PathSecurityError(f"Invalid filename: {untrusted_path}")
+    
+    # Construct full path
+    full_path = (base_path / safe_name).resolve()
+    base_resolved = base_path.resolve()
+    
+    # Verify the result is still within base_path
+    if not str(full_path).startswith(str(base_resolved)):
+        logger.warning(f"Path traversal attempt detected: {untrusted_path}")
+        raise PathSecurityError(f"Path traversal detected: {untrusted_path}")
+    
+    return full_path
+
+
+def validate_document_id(doc_id: str) -> bool:
+    """
+    Validate that a document ID is safe to use in filenames.
+    
+    Document IDs should be hex strings from hash functions.
+    """
+    if not doc_id:
+        return False
+    # Only allow alphanumeric and hyphens/underscores (typical for IDs)
+    return bool(re.match(r'^[a-zA-Z0-9_-]+$', doc_id))
 
 
 class DocumentStore:
@@ -42,21 +121,33 @@ class DocumentStore:
         """
         Save a document with its content.
         
+        Security: Uses secure path joining to prevent traversal attacks.
+        
         Args:
             doc: Document metadata
             source_path: Path to original file (will be copied)
             full_text: Extracted text content
+            
+        Raises:
+            PathSecurityError: If document ID or filename is unsafe
         """
-        # Save metadata
+        # Validate document ID
+        if not validate_document_id(doc.id):
+            raise PathSecurityError(f"Invalid document ID: {doc.id}")
+        
+        # Save metadata using validated ID
         metadata_file = self.metadata_path / f"{doc.id}.json"
         with open(metadata_file, "w") as f:
             json.dump(doc.model_dump(mode="json"), f, indent=2, default=str)
         
-        # Copy original file if provided
+        # Copy original file if provided (use secure path joining)
         if source_path and source_path.exists():
-            dest_path = self.base_path / doc.filename
-            if not dest_path.exists():
-                shutil.copy2(source_path, dest_path)
+            try:
+                dest_path = secure_path_join(self.base_path, doc.filename)
+                if not dest_path.exists():
+                    shutil.copy2(source_path, dest_path)
+            except PathSecurityError as e:
+                logger.warning(f"Skipping file copy due to security error: {e}")
         
         # Save full text content
         if full_text:

@@ -4,6 +4,7 @@
 import sys
 import asyncio
 import argparse
+import logging
 from pathlib import Path
 
 # Add src to path
@@ -13,6 +14,22 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.config import config
 from src.rag_agent import RAGAgent
 from src.llm_client import get_llm_client
+from src.security import validate_file_size, validate_path_safety
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('ingest.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Silence noisy loggers  
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('chromadb').setLevel(logging.WARNING)
 
 # Try to import tqdm for progress bar
 try:
@@ -26,6 +43,37 @@ except ImportError:
 
 # Supported file extensions
 SUPPORTED_EXTENSIONS = {'.pdf', '.xlsx', '.xls', '.csv'}
+
+# Maximum file size (500MB)
+MAX_FILE_SIZE_MB = 500
+
+
+def validate_file_for_ingestion(file_path: Path) -> tuple[bool, str]:
+    """
+    Validate a file is safe and appropriate for ingestion.
+    
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    # Check extension
+    if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        return False, f"Unsupported file type: {file_path.suffix}"
+    
+    # Check path safety (no traversal)
+    is_safe, error = validate_path_safety(str(file_path.name), SUPPORTED_EXTENSIONS)
+    if not is_safe:
+        return False, f"Path security issue: {error}"
+    
+    # Check file size
+    try:
+        size_bytes = file_path.stat().st_size
+        is_valid_size, error = validate_file_size(size_bytes, MAX_FILE_SIZE_MB)
+        if not is_valid_size:
+            return False, error
+    except OSError as e:
+        return False, f"Cannot read file: {e}"
+    
+    return True, ""
 
 
 def parse_args():
@@ -171,9 +219,18 @@ async def main():
             skipped_files.append((path.name, f"unsupported type {ext}"))
             continue
         
+        # Validate file before ingestion (SEC-006)
+        is_valid, error = validate_file_for_ingestion(path)
+        if not is_valid:
+            skipped_files.append((path.name, error))
+            logger.warning(f"Skipping invalid file: {error}")
+            continue
+        
         # Update progress bar description
         if show_progress:
             iterator.set_postfix_str(path.name[:30])
+        
+        logger.info(f"Ingesting file: {path.name} ({path.stat().st_size / 1024 / 1024:.1f}MB)")
         
         try:
             result = await agent.ingest_document(path)

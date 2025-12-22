@@ -136,5 +136,5 @@ class PDFParser:
         """Generate a unique document ID from filename."""
         # Use hash of filename for consistent IDs
         hash_input = filename.encode()
-        return hashlib.md5(hash_input).hexdigest()[:12]
+        return hashlib.sha256(hash_input).hexdigest()[:16]
 

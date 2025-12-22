@@ -26,7 +26,12 @@ _dotenv_loaded = _load_dotenv()
 
 @dataclass
 class Config:
-    """Application configuration."""
+    """
+    Application configuration with secure credential handling.
+    
+    API keys are accessed via properties and retrieved from environment
+    at runtime to minimize exposure in memory and stack traces.
+    """
     
     # Paths
     base_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent)
@@ -36,14 +41,11 @@ class Config:
     sqlite_path: Path = field(default=None)
     chroma_path: Path = field(default=None)
     
-    # LLM settings
+    # LLM settings (non-sensitive)
     llm_provider: str = "auto"
     llm_model: str = "google/gemini-3-flash-preview"  # Fast Gemini model
-    openrouter_api_key: str = field(default=None)
-    openai_api_key: str = field(default=None)
-    anthropic_api_key: str = field(default=None)
     
-    # Embedding settings
+    # Embedding settings (non-sensitive)
     embedding_model: str = "qwen/qwen3-embedding-8b"  # OpenRouter default
     embedding_provider: str = "auto"  # "auto", "openrouter", or "local"
     local_embedding_model: str = "BAAI/bge-large-en-v1.5"  # Better local model
@@ -60,8 +62,11 @@ class Config:
     chunk_size: int = 500
     chunk_overlap: int = 50
     
+    # Internal: cached values from environment (not exposed)
+    _cached_llm_model: str = field(default=None, repr=False)
+    
     def __post_init__(self):
-        """Initialize derived paths and load environment variables."""
+        """Initialize derived paths and load non-sensitive settings."""
         # Set up paths
         if self.data_dir is None:
             self.data_dir = self.base_dir / "data"
@@ -78,15 +83,32 @@ class Config:
         self.documents_dir.mkdir(parents=True, exist_ok=True)
         self.db_dir.mkdir(parents=True, exist_ok=True)
         
-        # Load from environment (includes .env via dotenv)
-        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", self.openrouter_api_key)
-        self.openai_api_key = os.getenv("OPENAI_API_KEY", self.openai_api_key)
-        self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", self.anthropic_api_key)
-        self.llm_model = os.getenv("LLM_MODEL", self.llm_model)
+        # Load non-sensitive settings from environment
+        self._cached_llm_model = os.getenv("LLM_MODEL", self.llm_model)
+        self.llm_model = self._cached_llm_model
         self.embedding_model = os.getenv("EMBEDDING_MODEL", self.embedding_model)
         self.embedding_provider = os.getenv("EMBEDDING_PROVIDER", self.embedding_provider)
         self.vision_model = os.getenv("VISION_MODEL", self.vision_model)
         self.use_vision_tables = os.getenv("USE_VISION_TABLES", "true").lower() == "true"
+    
+    # =========================================================================
+    # Secure API Key Access (retrieved at runtime, not stored)
+    # =========================================================================
+    
+    @property
+    def openrouter_api_key(self) -> str | None:
+        """Get OpenRouter API key from environment."""
+        return os.getenv("OPENROUTER_API_KEY")
+    
+    @property
+    def openai_api_key(self) -> str | None:
+        """Get OpenAI API key from environment."""
+        return os.getenv("OPENAI_API_KEY")
+    
+    @property
+    def anthropic_api_key(self) -> str | None:
+        """Get Anthropic API key from environment."""
+        return os.getenv("ANTHROPIC_API_KEY")
     
     @property
     def has_llm_key(self) -> bool:
@@ -95,6 +117,21 @@ class Config:
             self.openrouter_api_key or 
             self.openai_api_key or 
             self.anthropic_api_key
+        )
+    
+    def __repr__(self) -> str:
+        """
+        Safe repr that doesn't expose API keys.
+        
+        This is important for logging and debugging where repr might
+        be called automatically.
+        """
+        return (
+            f"Config("
+            f"llm_model='{self.llm_model}', "
+            f"has_openrouter={bool(self.openrouter_api_key)}, "
+            f"has_openai={bool(self.openai_api_key)}, "
+            f"has_anthropic={bool(self.anthropic_api_key)})"
         )
 
 

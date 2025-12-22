@@ -3,6 +3,7 @@
 import sqlite3
 import json
 import re
+import logging
 from pathlib import Path
 from typing import Any
 from contextlib import contextmanager
@@ -11,6 +12,87 @@ import pandas as pd
 
 from ..models import Document, ExtractedTable, TableSchema
 from ..config import config
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Security: SQL Injection Protection
+# =============================================================================
+
+class SecurityError(Exception):
+    """Raised when a security violation is detected."""
+    pass
+
+
+# Forbidden SQL keywords that could modify data or schema
+FORBIDDEN_SQL_KEYWORDS = {
+    'DROP', 'DELETE', 'INSERT', 'UPDATE', 'ALTER', 'CREATE', 'TRUNCATE',
+    'EXEC', 'EXECUTE', 'GRANT', 'REVOKE', 'ATTACH', 'DETACH', 'PRAGMA',
+    'VACUUM', 'REINDEX', 'REPLACE', 'MERGE'
+}
+
+# Maximum result rows to prevent DoS
+MAX_SQL_RESULT_ROWS = 10000
+
+
+def validate_sql_query(sql: str) -> tuple[bool, str]:
+    """
+    Validate that a SQL query is safe to execute.
+    
+    Args:
+        sql: The SQL query string to validate
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not sql or not sql.strip():
+        return False, "Empty query"
+    
+    sql_stripped = sql.strip()
+    sql_upper = sql_stripped.upper()
+    
+    # Must start with SELECT (case insensitive)
+    if not sql_upper.startswith('SELECT'):
+        return False, "Only SELECT queries are allowed"
+    
+    # Check for forbidden keywords
+    # Use word boundaries to avoid false positives (e.g., "UPDATED_AT" column)
+    for keyword in FORBIDDEN_SQL_KEYWORDS:
+        # Pattern: word boundary + keyword + word boundary (not part of identifier)
+        pattern = rf'\b{keyword}\b'
+        if re.search(pattern, sql_upper):
+            return False, f"Forbidden keyword detected: {keyword}"
+    
+    # Check for multiple statements (semicolon followed by non-whitespace)
+    # Allow trailing semicolon but not multiple statements
+    semicolon_count = sql_stripped.rstrip(';').count(';')
+    if semicolon_count > 0:
+        return False, "Multiple SQL statements are not allowed"
+    
+    # Check for comment injection (could hide malicious code)
+    if '--' in sql or '/*' in sql:
+        return False, "SQL comments are not allowed"
+    
+    return True, ""
+
+
+def add_limit_clause(sql: str, max_rows: int = MAX_SQL_RESULT_ROWS) -> str:
+    """
+    Add a LIMIT clause to SQL if not already present.
+    
+    This prevents unbounded result sets that could cause DoS.
+    """
+    sql_upper = sql.upper()
+    
+    # If already has LIMIT, don't add another
+    if 'LIMIT' in sql_upper:
+        return sql
+    
+    # Remove trailing semicolon if present
+    sql_clean = sql.rstrip().rstrip(';')
+    
+    return f"{sql_clean} LIMIT {max_rows}"
 
 
 class SQLiteStore:
@@ -449,14 +531,40 @@ class SQLiteStore:
     
     def execute_query(self, sql: str) -> list[dict[str, Any]]:
         """
-        Execute a raw SQL query and return results.
+        Execute a validated SQL query and return results.
         
-        WARNING: This should only be called with LLM-generated SQL that has
-        been validated. For production, add SQL injection protection.
+        Security measures:
+        - Only SELECT queries allowed
+        - Forbidden keywords blocked (DROP, DELETE, etc.)
+        - Multiple statements blocked
+        - Automatic LIMIT clause added if missing
+        
+        Args:
+            sql: SQL query (must be a SELECT statement)
+            
+        Returns:
+            List of result rows as dictionaries
+            
+        Raises:
+            SecurityError: If the query fails validation
         """
+        # Validate the SQL before execution
+        is_valid, error_msg = validate_sql_query(sql)
+        if not is_valid:
+            logger.warning(f"SQL validation failed: {error_msg}. Query: {sql[:100]}...")
+            raise SecurityError(f"Query validation failed: {error_msg}")
+        
+        # Add LIMIT clause to prevent unbounded results
+        safe_sql = add_limit_clause(sql)
+        
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(sql)
+            try:
+                cursor.execute(safe_sql)
+            except sqlite3.Error as e:
+                # Log the error but don't expose SQL details to caller
+                logger.error(f"SQL execution error: {e}")
+                raise SecurityError("Query execution failed")
             
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             

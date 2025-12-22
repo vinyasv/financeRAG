@@ -236,5 +236,5 @@ class ChromaStore:
     def generate_chunk_id(document_id: str, chunk_index: int) -> str:
         """Generate a unique chunk ID."""
         content = f"{document_id}:{chunk_index}"
-        return hashlib.md5(content.encode()).hexdigest()[:16]
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
 

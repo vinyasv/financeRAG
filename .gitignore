@@ -43,3 +43,7 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Logs (may contain sensitive query data)
+*.log
+logs/

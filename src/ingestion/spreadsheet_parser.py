@@ -238,7 +238,7 @@ class SpreadsheetParser:
         content = filename
         if sheet_name:
             content = f"{filename}:{sheet_name}"
-        return hashlib.md5(content.encode()).hexdigest()[:12]
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
     
     @staticmethod
     def sanitize_table_name(name: str) -> str:
