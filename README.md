@@ -1,63 +1,112 @@
-# Finance RAG
+<p align="center">
+  <h1 align="center">Finance RAG</h1>
+  <p align="center">
+    High-performance RAG for financial documents with parallel execution and audit transparency
+    <br />
+    <a href="#quick-start">Quick Start</a>
+    ·
+    <a href="#features">Features</a>
+    ·
+    <a href="technicaloverview.md">Technical Docs</a>
+  </p>
+</p>
 
-A high-performance RAG (Retrieval Augmented Generation) system designed for financial documents. Extracts structured data from PDFs, enables semantic search, and provides accurate answers to complex queries using parallel tool execution.
+---
 
-## Key Features
+## Quick Start
 
-### Parallel Execution
-- Independent tool calls run simultaneously for maximum speed
-- DAG-based execution planning with dependency resolution
-- Real-time execution monitoring with per-step timing
+```bash
+# Install
+pip install -r requirements.txt
 
-### Smart Table Extraction
-- **Vision-based extraction**: Uses VLMs via `thepipe` for 5-6x faster, more accurate table parsing
-- **Fallback rule-based extraction**: Works without API keys using `pdfplumber`
-- **Schema enhancement**: LLM-powered column and table name normalization
+# Configure
+cp env.example .env
+# Add your OPENROUTER_API_KEY to .env
 
-### FlashRank Reranking
-- Ultra-fast reranking (~10-50ms latency) using distilled T5 models
-- Hybrid scoring combining vector similarity + reranker scores
-- Dramatically improved retrieval precision over pure embedding search
+# Ingest documents
+python scripts/ingest.py path/to/annual_report.pdf
 
-### Flexible Embeddings
-- **OpenRouter**: Qwen3-8B, OpenAI, Cohere, Google embeddings via single API key
-- **Local**: Free sentence-transformers (BGE-large, all-MiniLM-L6-v2)
-- Auto-detection based on available API keys
+# Query
+python scripts/query.py "What was 2024 revenue growth?"
+```
 
-### Deterministic Calculations
-- Calculator tool for safe arithmetic evaluation
-- **Calculation transcripts** with full operand binding visibility
-- Avoids LLM hallucination on numerical computations
-- Supports complex expressions with percentages and unit conversions
+## Features
 
-### Audit Transparency
-- **Operand binding visibility**: Every calculation shows source values with provenance
-- **Computation enforcement**: LLM prohibited from performing arithmetic—all math via calculator
-- **Refusal as success mode**: System refuses with explanation when data is insufficient
-- **Definition hashing**: Field comparability checking for GAAP vs non-GAAP, segment scope, etc.
+| Feature | Description |
+|---------|-------------|
+| **Parallel Execution** | DAG-based tool execution for maximum speed |
+| **Smart Table Extraction** | Vision-based (VLM) or rule-based PDF table parsing |
+| **FlashRank Reranking** | Ultra-fast reranking (~10-50ms) for precise retrieval |
+| **Audit Transparency** | Calculation transcripts with operand provenance |
+| **Multi-Provider LLM** | OpenRouter, OpenAI, Anthropic, local models |
+| **Export** | PDF, CSV, JSON output formats |
 
-### Batch Processing & Export
-- **Batch folder ingestion**: Recursively ingest entire directories with progress bar
-- **Export to PDF/CSV/JSON**: Generate professional reports from query results
-- **Accurate citations**: Shows filename, page number, and line references
+<details>
+<summary><strong>Audit Transparency Features</strong></summary>
 
-### Multi-Provider LLM Support
-- **OpenRouter** (recommended): Single API key for all models
-- **Direct APIs**: OpenAI, Anthropic
-- **Model shortcuts**: `gpt-4o`, `claude-sonnet`, `gemini-flash`, `llama-70b`, etc.
+- **Operand binding**: Every calculation shows source values with provenance
+- **Computation enforcement**: LLM prohibited from arithmetic—all math via calculator
+- **Refusal mode**: System refuses with explanation when data is insufficient
+- **Definition hashing**: Field comparability checking (GAAP vs non-GAAP, etc.)
+
+</details>
 
 ## Architecture
 
 ```
-Query -> Planner (1 LLM call) -> Execution DAG -> Parallel Tool Calls -> Synthesize Response
-                                    |
-                    +---------------+---------------+
-                    |               |               |
-              SQL Query      Vector Search    Calculator
-                    |               |               |
-                    +---------------+---------------+
-                                    |
-                            Response Synthesis
+Query → Planner → Execution DAG → Parallel Tools → Response
+                        │
+          ┌─────────────┼─────────────┐
+          │             │             │
+      SQL Query   Vector Search   Calculator
+          │             │             │
+          └─────────────┴─────────────┘
+                        │
+                   Synthesizer
+```
+
+## Usage
+
+### Ingestion
+
+```bash
+python scripts/ingest.py document.pdf          # Single file
+python scripts/ingest.py -f ./reports/         # Entire folder
+```
+
+### Queries
+
+```bash
+python scripts/query.py                                    # Interactive
+python scripts/query.py "Compare margins 2023 vs 2024"     # Single query
+python scripts/query.py -m claude-sonnet "..."             # Specific model
+python scripts/query.py -o report.pdf "..."                # Export to PDF
+```
+
+<details>
+<summary><strong>Example Queries</strong></summary>
+
+```
+"What was the total revenue for Q4 2024?"
+"Compare gross margins between 2023 and 2024"
+"Calculate profit if operating costs increased by 15%"
+"What risks are mentioned regarding supply chain?"
+"Calculate the YoY growth rate for each quarter"
+```
+
+</details>
+
+## Configuration
+
+Create `.env` from `env.example`:
+
+```bash
+OPENROUTER_API_KEY=your-key-here   # Required (get at openrouter.ai/keys)
+
+# Optional
+LLM_MODEL=gpt-4o-mini              # Default model
+USE_VISION_TABLES=true             # Enable vision table extraction
+EMBEDDING_PROVIDER=local           # Use local embeddings (free)
 ```
 
 ## Tools
@@ -66,219 +115,38 @@ Query -> Planner (1 LLM call) -> Execution DAG -> Parallel Tool Calls -> Synthes
 |------|---------|
 | `sql_query` | Query structured data from extracted tables |
 | `vector_search` | Semantic search with FlashRank reranking |
-| `calculator` | Deterministic math with operand binding transcripts |
-| `get_document` | Retrieve full document or section content |
-| `comparability` | Check field definitions for comparability |
+| `calculator` | Deterministic math with audit transcripts |
+| `get_document` | Retrieve full document content |
+| `comparability` | Check field definition compatibility |
 
-## Installation
+## Performance
 
-```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Install FlashRank for reranking (optional but recommended)
-pip install flashrank
-
-# Set up environment variables
-cp env.example .env
-# Edit .env with your API keys
-```
-
-## Configuration
-
-Create a `.env` file in the project root:
-
-```bash
-# =============================================================================
-# API Key (required for full functionality)
-# =============================================================================
-OPENROUTER_API_KEY=your-key-here  # Get at https://openrouter.ai/keys
-
-# Or use direct provider APIs:
-# OPENAI_API_KEY=your-key
-# ANTHROPIC_API_KEY=your-key
-
-# =============================================================================
-# LLM Model (optional)
-# =============================================================================
-# Options: gpt-4o-mini, claude-sonnet, gemini-flash, llama-70b
-# LLM_MODEL=gpt-4o-mini
-
-# =============================================================================
-# Vision Model for Table Extraction (optional)
-# =============================================================================
-# VISION_MODEL=google/gemini-2.0-flash-001  # Fast, accurate, cheap
-# USE_VISION_TABLES=true                     # Enable vision extraction
-
-# =============================================================================
-# Embedding Model (optional)
-# =============================================================================
-# EMBEDDING_MODEL=qwen/qwen3-embedding-8b    # Default (OpenRouter)
-# EMBEDDING_PROVIDER=local                   # Force local embeddings
-```
-
-## Usage
-
-### Ingest Documents
-
-```bash
-# Ingest a single PDF
-python scripts/ingest.py path/to/document.pdf
-
-# Ingest multiple documents
-python scripts/ingest.py doc1.pdf doc2.pdf doc3.pdf
-
-# Batch ingest entire folder (with progress bar)
-python scripts/ingest.py -f /path/to/documents/
-
-# Only PDFs from a folder
-python scripts/ingest.py -f ./reports --pattern "*.pdf"
-```
-
-### Run Queries
-
-```bash
-# Interactive mode
-python scripts/query.py
-
-# Single query
-python scripts/query.py "What was Q4 revenue growth?"
-
-# Specify model
-python scripts/query.py -m claude-sonnet "Compare operating margins"
-
-# Verbose mode (shows execution details)
-python scripts/query.py -v "Calculate profit if costs increased 20%"
-
-# Export to PDF report
-python scripts/query.py -o report.pdf "What was NVIDIA's revenue?"
-
-# Export to CSV (for Excel)
-python scripts/query.py -o results.csv "Compare margins across companies"
-
-# Export to JSON
-python scripts/query.py -o data.json "List all risk factors"
-
-# List available models
-python scripts/query.py --list-models
-```
-
-### Interactive Commands
-
-```
-Query: quit     # Exit interactive mode
-Query: stats    # Show knowledge base statistics
-Query: models   # List available LLM models
-```
+| Operation | Latency |
+|-----------|---------|
+| Query Planning | 200-500ms |
+| Vector Search + Rerank | 50-150ms |
+| SQL Query | 5-50ms |
+| **End-to-end** | **500-1500ms** |
 
 ## Project Structure
 
 ```
-financeRAG/
-├── src/
-│   ├── agent/
-│   │   ├── planner.py        # Query planning with LLM
-│   │   ├── executor.py       # DAG-based parallel execution
-│   │   └── synthesizer.py    # Response synthesis
-│   ├── tools/
-│   │   ├── calculator.py     # Safe math with transcripts
-│   │   ├── sql_query.py      # Structured data queries
-│   │   ├── vector_search.py  # Semantic search + reranking
-│   │   ├── reranker.py       # FlashRank reranking
-│   │   ├── comparability.py  # Field comparability checking
-│   │   └── get_document.py   # Document retrieval
-│   ├── ingestion/
-│   │   ├── pdf_parser.py     # PDF text extraction
-│   │   ├── table_extractor.py        # Rule-based table extraction
-│   │   ├── vision_table_extractor.py # VLM-based table extraction
-│   │   ├── chunker.py        # Semantic text chunking
-│   │   └── schema_detector.py # LLM schema enhancement
-│   ├── storage/
-│   │   ├── sqlite_store.py   # Structured data storage
-│   │   ├── chroma_store.py   # Vector storage (ChromaDB)
-│   │   └── document_store.py # Full document storage
-│   ├── embeddings.py         # Multi-provider embedding support
-│   ├── llm_client.py         # LLM client abstraction
-│   ├── rag_agent.py          # Main agent orchestration
-│   ├── models.py             # Pydantic data models
-│   └── config.py             # Configuration management
-├── data/
-│   ├── documents/            # Full document storage
-│   └── db/                   # SQLite + ChromaDB databases
-├── scripts/
-│   ├── ingest.py             # Document ingestion CLI
-│   └── query.py              # Query CLI
-├── tests/                    # Test suite
-├── requirements.txt
-└── env.example               # Configuration template
+src/
+├── agent/          # Planner, executor, synthesizer
+├── tools/          # SQL, vector search, calculator
+├── ingestion/      # PDF parser, table extractor, chunker
+└── storage/        # SQLite, ChromaDB, document store
+scripts/
+├── ingest.py       # Document ingestion CLI
+└── query.py        # Query CLI
 ```
 
-## Performance
-
-| Operation | Typical Latency |
-|-----------|----------------|
-| Query Planning | ~200-500ms |
-| Vector Search + Rerank | ~50-150ms |
-| SQL Query | ~5-50ms |
-| Calculator | ~1ms |
-| Response Synthesis | ~300-800ms |
-| **Total Query** | **~500-1500ms** |
-
-## Example Queries
-
-```
-# Financial analysis
-"What was the total revenue for Q4 2024?"
-"Compare gross margins between 2023 and 2024"
-"Calculate what profit would be if operating costs increased by 15%"
-
-# Semantic search
-"What risks are mentioned regarding supply chain?"
-"Summarize the key strategic initiatives"
-
-# Complex queries
-"What percentage of total revenue came from the top 3 segments?"
-"Calculate the YoY growth rate for each quarter"
-```
-
-## Advanced Configuration
-
-### ChromaDB HNSW Parameters
-
-The vector store is optimized for large knowledge bases:
-
-```python
-{
-    "hnsw:space": "cosine",      # Cosine similarity
-    "hnsw:M": 32,                # Connections per node (higher = better recall)
-    "hnsw:construction_ef": 200, # Index quality
-    "hnsw:search_ef": 100,       # Search depth for large KBs
-}
-```
-
-### Reranking Configuration
-
-```python
-from src.tools.reranker import Reranker
-
-# Fast model (default)
-reranker = Reranker(model_name="rank-T5-flan")
-
-# More accurate model
-reranker = Reranker(model_name="rank_zephyr_7b_v1_full")
-```
+See [technicaloverview.md](technicaloverview.md) for detailed architecture.
 
 ## Contributing
 
-Contributions are welcome! Please ensure tests pass before submitting PRs.
-
 ```bash
-# Run tests
-pytest tests/
+pytest tests/       # Run tests before submitting PRs
 ```
 
 ## License
@@ -287,7 +155,4 @@ MIT
 
 ## Acknowledgements
 
-- [ChromaDB](https://www.trychroma.com/) - Vector database
-- [FlashRank](https://github.com/PrithivirajDamodaran/FlashRank) - Ultra-fast reranking
-- [thepipe](https://github.com/emcf/thepipe) - Vision-based PDF extraction
-- [OpenRouter](https://openrouter.ai/) - Multi-model LLM gateway
+[ChromaDB](https://www.trychroma.com/) · [FlashRank](https://github.com/PrithivirajDamodaran/FlashRank) · [thepipe](https://github.com/emcf/thepipe) · [OpenRouter](https://openrouter.ai/)
