@@ -6,7 +6,31 @@ import re
 from typing import Any
 
 from .base import Tool
-from ..models import ToolName
+from ..models import ToolName, CalculationTranscript, OperandBinding, QueryRefusal, RefusalReason
+
+
+class ComparabilityError(Exception):
+    """Raised when operands are not comparable for a calculation."""
+    
+    def __init__(self, message: str, what_was_found: str, what_is_missing: list[str]):
+        super().__init__(message)
+        self.message = message
+        self.what_was_found = what_was_found
+        self.what_is_missing = what_is_missing
+    
+    def to_refusal(self) -> QueryRefusal:
+        """Convert to a QueryRefusal for structured handling."""
+        return QueryRefusal(
+            reason=RefusalReason.INCOMPARABLE_METRICS,
+            explanation=self.message,
+            what_was_found=self.what_was_found,
+            what_is_missing=self.what_is_missing,
+            suggested_alternatives=[
+                "Query each metric separately",
+                "Verify the metrics use the same accounting standard",
+                "Check if the time periods are aligned"
+            ]
+        )
 
 
 class CalculatorTool(Tool):
@@ -38,28 +62,76 @@ class CalculatorTool(Tool):
     # Reference pattern: {step_id} or {step_id.field} or {step_id.field.subfield}
     REFERENCE_PATTERN = re.compile(r'\{([^}]+)\}')
     
-    async def execute(self, input_str: str, context: dict[str, Any] | None = None) -> float:
+    async def execute(self, input_str: str, context: dict[str, Any] | None = None) -> CalculationTranscript | QueryRefusal:
         """
-        Evaluate a math expression.
+        Evaluate a math expression with full audit transparency.
         
         Args:
             input_str: Math expression, may contain references like {step_1.revenue}
             context: Dict mapping step IDs to their results
             
         Returns:
-            The computed result as a float
+            CalculationTranscript with bindings, resolved expression, and result,
+            OR QueryRefusal if comparability checks fail
         """
-        # Resolve references first
-        resolved = self._resolve_references(input_str, context or {})
+        ctx = context or {}
         
-        # Parse and evaluate
-        return self._safe_eval(resolved)
+        try:
+            # Resolve references and collect bindings
+            resolved, bindings = self._resolve_references_with_bindings(input_str, ctx)
+            
+            # Parse and evaluate
+            result = self._safe_eval(resolved)
+            
+            # Build the transcript
+            return CalculationTranscript(
+                original_expression=input_str,
+                bindings=bindings,
+                resolved_expression=resolved,
+                result=result,
+                formula_description=self._infer_formula_description(input_str)
+            )
+        except ComparabilityError as e:
+            # Convert to structured refusal
+            return e.to_refusal()
     
-    def _resolve_references(self, expression: str, context: dict[str, Any]) -> str:
-        """Replace {step_id.field} references with actual values."""
+    def _infer_formula_description(self, expression: str) -> str | None:
+        """Infer a human-readable description from the expression."""
+        expr_lower = expression.lower()
+        
+        # Common financial calculations
+        if " - " in expression and ("growth" in expr_lower or "change" in expr_lower):
+            return "Change/Growth Calculation"
+        elif " / " in expression:
+            if "margin" in expr_lower:
+                return "Margin Calculation"
+            elif "ratio" in expr_lower:
+                return "Ratio Calculation"
+            return "Division"
+        elif " * " in expression:
+            if "%" in expression or "100" in expression:
+                return "Percentage Calculation"
+            return "Multiplication"
+        elif " - " in expression:
+            return "Difference"
+        elif " + " in expression:
+            return "Sum"
+        return None
+    
+    def _resolve_references_with_bindings(
+        self, expression: str, context: dict[str, Any]
+    ) -> tuple[str, list[OperandBinding]]:
+        """
+        Replace {step_id.field} references with actual values and track bindings.
+        
+        Returns:
+            Tuple of (resolved_expression, list_of_bindings)
+        """
+        bindings: list[OperandBinding] = []
         
         def replace_ref(match: re.Match) -> str:
-            ref = match.group(1)  # e.g., "step_1.revenue" or "step_3"
+            ref_full = match.group(0)  # e.g., "{step_1.revenue}"
+            ref = match.group(1)       # e.g., "step_1.revenue"
             parts = ref.split(".")
             
             # Get the step result
@@ -68,9 +140,13 @@ class CalculatorTool(Tool):
                 raise ValueError(f"Reference to unknown step: {step_id}")
             
             value = context[step_id]
+            field_path = parts[1:] if len(parts) > 1 else []
+            
+            # Build source description from context
+            source_desc = self._build_source_description(step_id, field_path, context)
             
             # Navigate nested fields
-            for part in parts[1:]:
+            for part in field_path:
                 if isinstance(value, dict):
                     if part not in value:
                         raise ValueError(f"Field '{part}' not found in {step_id}")
@@ -81,18 +157,49 @@ class CalculatorTool(Tool):
                     raise ValueError(f"Cannot access '{part}' on {type(value)}")
             
             # Convert to number
+            numeric_value: float
             if isinstance(value, (int, float)):
-                return str(value)
+                numeric_value = float(value)
             elif isinstance(value, str):
-                # Try to parse as number
                 try:
-                    return str(float(value.replace(",", "").replace("$", "")))
+                    numeric_value = float(value.replace(",", "").replace("$", ""))
                 except ValueError:
                     raise ValueError(f"Cannot convert '{value}' to number")
             else:
                 raise ValueError(f"Cannot use {type(value)} in calculation")
+            
+            # Record the binding
+            bindings.append(OperandBinding(
+                reference=ref_full,
+                resolved_value=numeric_value,
+                source_step=step_id,
+                source_description=source_desc
+            ))
+            
+            return str(numeric_value)
         
-        return self.REFERENCE_PATTERN.sub(replace_ref, expression)
+        resolved = self.REFERENCE_PATTERN.sub(replace_ref, expression)
+        return resolved, bindings
+    
+    def _build_source_description(
+        self, step_id: str, field_path: list[str], context: dict[str, Any]
+    ) -> str:
+        """Build a human-readable description of where a value came from."""
+        step_result = context.get(step_id, {})
+        
+        # Try to get tool type from context metadata
+        tool_type = "unknown"
+        if isinstance(step_result, dict):
+            if "columns" in step_result:
+                tool_type = "SQL query"
+            elif "content" in step_result:
+                tool_type = "document"
+        
+        if field_path:
+            field_name = ".".join(field_path)
+            return f"{tool_type}: {field_name} from {step_id}"
+        else:
+            return f"{tool_type}: result from {step_id}"
     
     def _safe_eval(self, expression: str) -> float:
         """
@@ -163,15 +270,21 @@ class CalculatorTool(Tool):
 
 
 # Convenience function for direct use
-async def calculate(expression: str, context: dict[str, Any] | None = None) -> float:
+async def calculate(expression: str, context: dict[str, Any] | None = None) -> CalculationTranscript | QueryRefusal:
     """
-    Evaluate a math expression.
+    Evaluate a math expression with full audit transparency.
     
     Examples:
-        >>> await calculate("2 + 3 * 4")
+        >>> result = await calculate("2 + 3 * 4")
+        >>> result.result
         14.0
-        >>> await calculate("{step_1.revenue} * 0.7", {"step_1": {"revenue": 4200000}})
+        >>> result = await calculate("{step_1.revenue} * 0.7", {"step_1": {"revenue": 4200000}})
+        >>> result.result
         2940000.0
+        >>> print(result.format_for_display())  # Shows full calculation transcript
+        
+    Returns:
+        CalculationTranscript on success, or QueryRefusal if comparability checks fail.
     """
     tool = CalculatorTool()
     return await tool.execute(expression, context)

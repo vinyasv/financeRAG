@@ -3,7 +3,7 @@
 from typing import Any
 import logging
 
-from ..models import ExecutionPlan, ToolResult, QueryResponse, Citation, ToolName
+from ..models import ExecutionPlan, ToolResult, QueryResponse, Citation, ToolName, CalculationTranscript, QueryRefusal
 from ..storage.document_store import DocumentStore
 from ..security import sanitize_user_input, wrap_user_content
 
@@ -49,14 +49,22 @@ RESPONSE STRUCTURE (when appropriate):
 • For comparisons, use TABLES or structured formats
 • Include CAVEATS for any limitations in the data
 
-FINANCIAL CALCULATIONS (if performing any):
+═══════════════════════════════════════════════════════════════════════════════
+CRITICAL: ARITHMETIC PROHIBITION
+═══════════════════════════════════════════════════════════════════════════════
+• ALL arithmetic operations MUST come from calculator tool results in RESEARCH FINDINGS
+• You may EXPLAIN what a calculation represents but NEVER perform arithmetic yourself
+• If a needed calculation wasn't performed, state: "This would require computing [X]"
+• Quote numbers EXACTLY as they appear in the research findings—do not round, adjust, or compute
+• Calculator results include a full audit trail showing operand sources—reference this when explaining
+
+FINANCIAL FORMULA REFERENCE (for explanation only, not computation):
 • Operating Margin = Operating Income / Revenue
 • Net Margin = Net Income / Revenue
 • YoY Growth = (Current - Prior) / Prior × 100
 • ROE = Net Income / Shareholders' Equity
 • P/E Ratio = Stock Price / Earnings Per Share
 • Free Cash Flow = Operating Cash Flow - Capital Expenditures
-• ALWAYS show your calculation steps
 
 PROFESSIONAL STANDARDS:
 • Use proper financial terminology
@@ -180,7 +188,8 @@ class ResponseSynthesizer:
                 parts.append(f"**Data:** {self._format_result(result.result)}")
             
             elif step.tool == ToolName.CALCULATOR:
-                parts.append(f"**Calculation result:** {result.result}")
+                # Uses CalculationTranscript formatting if available
+                parts.append(f"**Calculation:**\n{self._format_result(result.result)}")
             
             elif step.tool == ToolName.VECTOR_SEARCH:
                 if isinstance(result.result, list) and result.result:
@@ -207,6 +216,14 @@ class ResponseSynthesizer:
         """Format a result for display."""
         if result is None:
             return "No result"
+        
+        # Handle CalculationTranscript with full audit transparency
+        if isinstance(result, CalculationTranscript):
+            return result.format_for_display()
+        
+        # Handle QueryRefusal - treat refusal as a success mode
+        if isinstance(result, QueryRefusal):
+            return result.format_for_display()
         
         if isinstance(result, (int, float)):
             # Format large numbers with commas

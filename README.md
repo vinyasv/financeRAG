@@ -26,8 +26,15 @@ A high-performance RAG (Retrieval Augmented Generation) system designed for fina
 
 ### Deterministic Calculations
 - Calculator tool for safe arithmetic evaluation
+- **Calculation transcripts** with full operand binding visibility
 - Avoids LLM hallucination on numerical computations
 - Supports complex expressions with percentages and unit conversions
+
+### Audit Transparency
+- **Operand binding visibility**: Every calculation shows source values with provenance
+- **Computation enforcement**: LLM prohibited from performing arithmetic—all math via calculator
+- **Refusal as success mode**: System refuses with explanation when data is insufficient
+- **Definition hashing**: Field comparability checking for GAAP vs non-GAAP, segment scope, etc.
 
 ### Batch Processing & Export
 - **Batch folder ingestion**: Recursively ingest entire directories with progress bar
@@ -59,8 +66,9 @@ Query -> Planner (1 LLM call) -> Execution DAG -> Parallel Tool Calls -> Synthes
 |------|---------|
 | `sql_query` | Query structured data from extracted tables |
 | `vector_search` | Semantic search with FlashRank reranking |
-| `calculator` | Safe deterministic math expression evaluation |
+| `calculator` | Deterministic math with operand binding transcripts |
 | `get_document` | Retrieve full document or section content |
+| `comparability` | Check field definitions for comparability |
 
 ## Installation
 
@@ -177,10 +185,11 @@ financeRAG/
 │   │   ├── executor.py       # DAG-based parallel execution
 │   │   └── synthesizer.py    # Response synthesis
 │   ├── tools/
-│   │   ├── calculator.py     # Safe math evaluation
+│   │   ├── calculator.py     # Safe math with transcripts
 │   │   ├── sql_query.py      # Structured data queries
 │   │   ├── vector_search.py  # Semantic search + reranking
 │   │   ├── reranker.py       # FlashRank reranking
+│   │   ├── comparability.py  # Field comparability checking
 │   │   └── get_document.py   # Document retrieval
 │   ├── ingestion/
 │   │   ├── pdf_parser.py     # PDF text extraction

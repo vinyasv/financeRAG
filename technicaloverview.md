@@ -138,8 +138,9 @@ class Planner:
 |------|---------|-------|--------|
 | `sql_query` | Query structured tables | Natural language | SQL results |
 | `vector_search` | Semantic document search | Search query | Relevant chunks |
-| `calculator` | Safe math evaluation | Expression | Numeric result |
+| `calculator` | Safe math with audit transcripts | Expression | `CalculationTranscript` |
 | `get_document` | Retrieve full documents | Document ID | Document content |
+| `comparability` | Check field comparability | Two field definitions | `ComparabilityResult` |
 
 **Tool Interface:**
 ```python
@@ -164,9 +165,85 @@ class ResponseSynthesizer:
 **Output includes:**
 - Professional financial analyst formatting
 - Source citations with page/line numbers
-- Calculation step documentation
+- **Calculation transcripts** with operand bindings
+- **Refusal handling** for insufficient data
 
 ---
+
+## Audit Transparency Architecture
+
+The system implements four layers of audit transparency to ensure calculations are verifiable and data quality issues are surfaced.
+
+### 1. Operand Binding Visibility
+
+Every calculation produces a `CalculationTranscript` showing the provenance of each value:
+
+```python
+class CalculationTranscript(BaseModel):
+    original_expression: str      # "{step_1.revenue} - {step_2.revenue}"
+    bindings: list[OperandBinding] # Source for each value
+    resolved_expression: str      # "145600000000 - 128695000000"
+    result: float                 # 16905000000.0
+    formula_description: str      # "Difference"
+```
+
+**Example Output:**
+```
+**Calculation:** Difference
+  • {step_1.revenue}: $145.60B (SQL query: revenue from step_1)
+  • {step_2.revenue}: $128.69B (SQL query: revenue from step_2)
+  • Expression: `145600000000.0 - 128695000000.0`
+  • **Result:** $16.91B
+```
+
+### 2. Computation Enforcement
+
+The LLM is explicitly prohibited from performing arithmetic. All math must come from the calculator tool:
+
+```
+CRITICAL: ARITHMETIC PROHIBITION
+• ALL arithmetic operations MUST come from calculator tool results
+• You may EXPLAIN calculations but NEVER perform them yourself
+• Quote numbers EXACTLY as they appear in research findings
+```
+
+### 3. Refusal as Success Mode
+
+When data quality or comparability issues arise, the system refuses gracefully:
+
+```python
+class QueryRefusal(BaseModel):
+    reason: RefusalReason         # INSUFFICIENT_DATA, DEFINITION_MISMATCH, etc.
+    explanation: str
+    what_was_found: str
+    what_is_missing: list[str]
+    suggested_alternatives: list[str]
+```
+
+Refusal reasons include:
+- `DEFINITION_MISMATCH`: Comparing incompatible metric definitions
+- `INSUFFICIENT_DATA`: Required data not available
+- `PERIOD_DISCONTINUITY`: Time periods don't align
+- `INCOMPARABLE_METRICS`: Different standards (GAAP vs non-GAAP)
+
+### 4. Definition Hashing / Versioning
+
+Field definitions are tracked with semantic hashes for comparability:
+
+```python
+class FieldDefinition(BaseModel):
+    field_name: str
+    definition_hash: str           # SHA256 for quick matching
+    accounting_standard: AccountingStandard  # GAAP, NON_GAAP, IFRS
+    segment_scope: str             # "Consolidated", "North America"
+    currency: str                  # "USD", "EUR"
+    excludes_items: list[str]      # "one-time items"
+```
+
+```python
+result = ComparabilityResult.check_comparability(field_a, field_b)
+# Returns: comparable=False, differences=["Accounting standards differ: gaap vs non_gaap"]
+```
 
 ## Data Flow
 
@@ -486,7 +563,8 @@ ultimateRAG/
 │   │   ├── base.py            # Tool interface
 │   │   ├── sql_query.py       # SQL tool
 │   │   ├── vector_search.py   # Search tool
-│   │   ├── calculator.py      # Math tool
+│   │   ├── calculator.py      # Math tool with transcripts
+│   │   ├── comparability.py   # Field comparability checking
 │   │   └── get_document.py    # Document tool
 │   ├── storage/
 │   │   ├── sqlite_store.py    # Structured storage
@@ -503,6 +581,8 @@ ultimateRAG/
 │   ├── query.py               # Query CLI
 │   └── ingest.py              # Ingestion CLI
 ├── tests/
+│   ├── test_calculator.py     # Calculator + transcript tests
+│   ├── test_executor.py       # DAG execution tests
 │   ├── test_sql_security.py
 │   └── test_prompt_injection.py
 ├── data/                      # Generated data directory
@@ -535,4 +615,4 @@ ultimateRAG/
 
 ---
 
-*Document Version: 1.0 | Last Updated: December 22, 2025*
+*Document Version: 1.1 | Last Updated: December 24, 2024*

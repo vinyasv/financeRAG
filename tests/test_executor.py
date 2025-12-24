@@ -33,7 +33,7 @@ class TestDAGExecutor:
         
         assert "step_1" in results
         assert results["step_1"].success
-        assert results["step_1"].result == 4.0
+        assert results["step_1"].result.result == 4.0  # CalculationTranscript.result
     
     def test_parallel_execution(self, executor):
         """Test that independent steps can run in parallel."""
@@ -61,9 +61,9 @@ class TestDAGExecutor:
         results = asyncio.run(executor.execute(plan))
         
         assert results["step_1"].success
-        assert results["step_1"].result == 20.0
+        assert results["step_1"].result.result == 20.0  # CalculationTranscript.result
         assert results["step_2"].success
-        assert results["step_2"].result == 40.0
+        assert results["step_2"].result.result == 40.0  # CalculationTranscript.result
     
     def test_dependent_execution(self, executor):
         """Test that dependencies are resolved correctly."""
@@ -90,8 +90,8 @@ class TestDAGExecutor:
         
         results = asyncio.run(executor.execute(plan))
         
-        assert results["step_1"].result == 100.0
-        assert results["step_2"].result == 200.0
+        assert results["step_1"].result.result == 100.0  # CalculationTranscript.result
+        assert results["step_2"].result.result == 200.0  # CalculationTranscript.result
     
     def test_complex_dag(self, executor):
         """Test a more complex DAG with multiple dependencies."""
@@ -132,10 +132,10 @@ class TestDAGExecutor:
         
         results = asyncio.run(executor.execute(plan))
         
-        assert results["step_1"].result == 1000.0
-        assert results["step_2"].result == 400.0
-        assert results["step_3"].result == 600.0
-        assert results["step_4"].result == 60.0  # 60% profit margin
+        assert results["step_1"].result.result == 1000.0  # CalculationTranscript.result
+        assert results["step_2"].result.result == 400.0  # CalculationTranscript.result
+        assert results["step_3"].result.result == 600.0  # CalculationTranscript.result
+        assert results["step_4"].result.result == 60.0  # 60% profit margin
 
 
 class TestExecutionLayers:

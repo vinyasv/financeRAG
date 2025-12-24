@@ -5,7 +5,7 @@ import re
 import time
 from typing import Any
 
-from ..models import ExecutionPlan, ToolCall, ToolResult, ToolName
+from ..models import ExecutionPlan, ToolCall, ToolResult, ToolName, CalculationTranscript
 from ..tools.base import Tool
 from ..tools.calculator import CalculatorTool
 from ..tools.sql_query import SQLQueryTool
@@ -87,7 +87,12 @@ class DAGExecutor:
                     result_values[step.id] = None
                 else:
                     results[step.id] = result
-                    result_values[step.id] = result.result
+                    # For CalculationTranscript, store the numeric result for reference resolution
+                    # This allows dependent steps to use {step_id} and get the computed number
+                    if isinstance(result.result, CalculationTranscript):
+                        result_values[step.id] = result.result.result
+                    else:
+                        result_values[step.id] = result.result
                 
                 completed.add(step.id)
         
@@ -194,7 +199,11 @@ class ExecutionMonitor:
             for step, (result, step_time) in zip(layer, layer_results):
                 self.step_timings[step.id] = step_time
                 results[step.id] = result
-                result_values[step.id] = result.result
+                # For CalculationTranscript, store the numeric result for reference resolution
+                if isinstance(result.result, CalculationTranscript):
+                    result_values[step.id] = result.result.result
+                else:
+                    result_values[step.id] = result.result
         
         self.total_time = time.perf_counter() - start_time
         
