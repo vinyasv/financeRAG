@@ -309,7 +309,7 @@ class Planner:
             
         except Exception as e:
             # Fall back to heuristics on parse error
-            print(f"Failed to parse LLM plan: {e}")
+            logger.warning(f"Failed to parse LLM plan: {e}")
             return self._plan_with_heuristics(query)
     
     def _plan_with_heuristics(self, query: str) -> ExecutionPlan:

@@ -1,10 +1,13 @@
 """LLM-based schema detection for extracted tables."""
 
-from typing import Any
 import json
+import logging
 import re
+from typing import Any
 
 from ..models import ExtractedTable, TableColumn, ColumnType
+
+logger = logging.getLogger(__name__)
 
 
 # Default prompt for schema detection
@@ -154,7 +157,7 @@ class SchemaDetector:
             
         except Exception as e:
             # Fall back to heuristics on error
-            print(f"LLM schema detection failed: {e}")
+            logger.warning(f"LLM schema detection failed: {e}")
             return self._detect_with_heuristics(table)
     
     def _apply_column_mappings(

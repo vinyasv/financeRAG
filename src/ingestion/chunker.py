@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from ..models import TextChunk
 from ..config import config
+from ..storage.chroma_store import ChromaStore
 from .pdf_parser import ParsedPDF
 
 
@@ -240,8 +241,6 @@ class SemanticChunker:
         end_line: int | None = None
     ) -> TextChunk:
         """Create a TextChunk instance with contextual prefix for better embedding."""
-        from ..storage.chroma_store import ChromaStore
-        
         chunk_id = ChromaStore.generate_chunk_id(document_id, chunk_index)
         
         # Add contextual prefix for better embedding quality

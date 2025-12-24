@@ -1,13 +1,16 @@
 """Table extraction using thepipe for fast, accurate PDF parsing."""
 
-import re
 import hashlib
+import logging
+import os
+import re
 from pathlib import Path
 from typing import Any
-import os
 
 from ..models import ExtractedTable
 from ..config import config
+
+logger = logging.getLogger(__name__)
 
 
 class VisionTableExtractor:
@@ -77,7 +80,7 @@ class VisionTableExtractor:
         
         client = self._get_openai_client()
         
-        print(f"    Extracting with thepipe (model: {self.vision_model})...")
+        logger.info(f"Extracting tables with thepipe (model: {self.vision_model})")
         
         # Use thepipe to scrape the PDF
         if client and config.use_vision_tables:
@@ -90,7 +93,7 @@ class VisionTableExtractor:
             # Without VLM, just extract text
             chunks = self._thepipe(filepath=str(pdf_path))
         
-        print(f"    Extracted {len(chunks)} chunks from PDF")
+        logger.debug(f"Extracted {len(chunks)} chunks from PDF")
         
         # Parse markdown tables from chunks
         tables = []
@@ -117,11 +120,11 @@ class VisionTableExtractor:
                 
                 if table and len(table.rows) > 0:
                     tables.append(table)
-                    print(f"    ✓ Table {table_index + 1}: {len(table.rows)} rows, {len(table.columns)} columns")
+                    logger.debug(f"Table {table_index + 1}: {len(table.rows)} rows, {len(table.columns)} columns")
                     table_index += 1
         
         if not tables:
-            print("    No tables found in document")
+            logger.debug("No tables found in document")
         
         return tables
     

@@ -1,4 +1,4 @@
-"""Security utilities for UltimateRAG.
+"""Security utilities for Finance RAG.
 
 This module provides security-related functions for input sanitization,
 prompt injection defense, and other security measures.

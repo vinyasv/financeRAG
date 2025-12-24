@@ -140,13 +140,6 @@ class ResponseSynthesizer:
         results: dict[str, ToolResult]
     ) -> str:
         """Generate response using LLM with prompt injection protection."""
-        # Format plan description
-        plan_lines = []
-        for step in plan.steps:
-            status = "✓" if results.get(step.id, ToolResult(step_id="", tool=ToolName.CALCULATOR, success=False)).success else "✗"
-            plan_lines.append(f"{status} {step.id}: {step.description}")
-        plan_description = "\n".join(plan_lines)
-        
         # Format results
         results_parts = []
         for step in plan.steps:
@@ -164,7 +157,6 @@ class ResponseSynthesizer:
         
         prompt = SYNTHESIS_PROMPT.format(
             query=wrapped_query,
-            plan_description=plan_description,
             results_text=results_text
         )
         

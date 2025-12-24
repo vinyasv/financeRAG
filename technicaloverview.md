@@ -1,6 +1,6 @@
-# UltimateRAG - Technical Overview
+# Finance RAG - Technical Overview
 
-A comprehensive technical document covering the architecture, components, and implementation details of the UltimateRAG financial document analysis system.
+A comprehensive technical document covering the architecture, components, and implementation details of the Finance RAG financial document analysis system.
 
 ---
 

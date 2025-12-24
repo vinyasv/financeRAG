@@ -77,7 +77,7 @@ class OpenRouterClient(LLMClient):
         api_key: str | None = None,
         model: str = "gpt-4o-mini",
         site_url: str | None = None,
-        app_name: str = "UltimateRAG"
+        app_name: str = "Finance RAG"
     ):
         """
         Initialize OpenRouter client.

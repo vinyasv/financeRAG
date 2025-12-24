@@ -1,4 +1,4 @@
-"""Pydantic models for UltimateRAG."""
+"""Pydantic models for Finance RAG."""
 
 from __future__ import annotations
 from enum import Enum

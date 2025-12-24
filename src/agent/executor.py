@@ -1,6 +1,7 @@
 """DAG executor with parallel execution."""
 
 import asyncio
+import re
 import time
 from typing import Any
 
@@ -121,8 +122,6 @@ class DAGExecutor:
         
         References are in the format {step_id} or {step_id.field}
         """
-        import re
-        
         def replace_ref(match: re.Match) -> str:
             ref = match.group(1)
             parts = ref.split(".")

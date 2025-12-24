@@ -342,7 +342,7 @@ def generate_markdown_report(results: list[QueryResult], stats: dict, output_pat
     """Generate a detailed markdown report."""
     
     lines = [
-        "# UltimateRAG Multi-Document Analyst Evaluation",
+        "# Finance RAG Multi-Document Analyst Evaluation",
         "",
         f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",

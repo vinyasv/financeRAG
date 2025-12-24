@@ -1,8 +1,9 @@
 """Main RAG agent that integrates all components."""
 
+import asyncio
+import logging
 from pathlib import Path
 from typing import Any
-import asyncio
 
 from .models import ExecutionPlan, QueryResponse, Document, TextChunk, ExtractedTable
 from .config import config
@@ -23,6 +24,8 @@ from .ingestion.chunker import SemanticChunker
 from .ingestion.schema_detector import SchemaDetector
 from .ingestion.spreadsheet_parser import SpreadsheetParser
 from .ingestion.temporal_extractor import extract_temporal_metadata
+
+logger = logging.getLogger(__name__)
 
 
 class RAGAgent:
@@ -158,15 +161,13 @@ class RAGAgent:
         tables = []
         
         if self.use_vision_tables:
-            # Use vision-based extraction for better accuracy
-            print(f"  Using vision LLM for table extraction...")
+            logger.info("Using vision LLM for table extraction")
             try:
                 tables = await self.vision_table_extractor.extract_tables_from_pdf(
                     pdf_path, doc_id
                 )
             except Exception as e:
-                print(f"  Vision extraction failed: {e}")
-                print(f"  Falling back to rule-based extraction...")
+                logger.warning(f"Vision extraction failed: {e}, falling back to rule-based")
                 tables = []
         
         if not tables:
@@ -176,9 +177,9 @@ class RAGAgent:
         for table in tables:
             # Always enhance schema with LLM for better column/table names
             if self.llm_client:
-                print(f"    Enhancing schema for table: {table.table_name[:40]}...")
+                logger.debug(f"Enhancing schema for table: {table.table_name[:40]}")
                 table = await self.schema_detector.detect_schema(table)
-                print(f"    → Renamed to: {table.table_name}")
+                logger.debug(f"Renamed to: {table.table_name}")
             self.sqlite_store.save_table(table)
         
         # Chunk text and store in vector DB
@@ -186,10 +187,7 @@ class RAGAgent:
         self.chroma_store.add_chunks(chunks)
         
         extraction_method = "vision" if self.use_vision_tables and tables else "rule-based"
-        print(f"Ingested: {pdf_path.name}")
-        print(f"  - {parsed.page_count} pages")
-        print(f"  - {len(tables)} tables extracted ({extraction_method})")
-        print(f"  - {len(chunks)} text chunks created")
+        logger.info(f"Ingested PDF: {pdf_path.name} - {parsed.page_count} pages, {len(tables)} tables ({extraction_method}), {len(chunks)} chunks")
         
         return doc
     
@@ -210,7 +208,7 @@ class RAGAgent:
         parsed = self.spreadsheet_parser.parse(file_path)
         documents = []
         
-        print(f"Parsing spreadsheet: {file_path.name}")
+        logger.info(f"Parsing spreadsheet: {file_path.name}")
         
         for sheet in parsed.sheets:
             # Generate unique ID for this sheet
@@ -287,12 +285,9 @@ class RAGAgent:
             self.chroma_store.add_chunks([chunk])
             
             documents.append(doc)
-            print(f"  Sheet '{sheet.sheet_name}': {sheet.row_count} rows, {sheet.col_count} columns → table '{table_name}'")
+            logger.debug(f"Sheet '{sheet.sheet_name}': {sheet.row_count} rows, {sheet.col_count} cols -> table '{table_name}'")
         
-        print(f"Ingested: {file_path.name}")
-        print(f"  - {len(parsed.sheets)} sheets → {len(documents)} documents")
-        print(f"  - {len(documents)} SQL tables created (native format)")
-        print(f"  - {len(documents)} text chunks created")
+        logger.info(f"Ingested spreadsheet: {file_path.name} - {len(parsed.sheets)} sheets, {len(documents)} tables")
         
         return documents
     
@@ -315,9 +310,8 @@ class RAGAgent:
         doc_ids = [d.id for d in documents]
         
         if verbose:
-            print(f"Query: {query}")
-            print(f"Available tables: {table_names}")
-            print(f"Available documents: {len(doc_ids)}")
+            logger.info(f"Query: {query}")
+            logger.info(f"Available tables: {table_names}, documents: {len(doc_ids)}")
         
         # Create execution plan
         plan = await self.planner.create_plan(
@@ -327,18 +321,18 @@ class RAGAgent:
         )
         
         if verbose:
-            print(f"\nExecution Plan ({len(plan.steps)} steps):")
+            logger.info(f"Execution Plan ({len(plan.steps)} steps):")
             for step in plan.steps:
                 deps = f" (depends on: {step.depends_on})" if step.depends_on else ""
-                print(f"  {step.id}: {step.tool.value} - {step.description}{deps}")
+                logger.info(f"  {step.id}: {step.tool.value} - {step.description}{deps}")
         
         # Execute plan
         if verbose:
             monitor = ExecutionMonitor()
             results, timing = await monitor.execute_with_monitoring(self.executor, plan)
-            print(f"\nExecution completed in {timing['total_time_ms']:.1f}ms")
+            logger.info(f"Execution completed in {timing['total_time_ms']:.1f}ms")
             for step_id, time_ms in timing['step_times_ms'].items():
-                print(f"  {step_id}: {time_ms:.1f}ms")
+                logger.debug(f"  {step_id}: {time_ms:.1f}ms")
         else:
             results = await self.executor.execute(plan)
         
@@ -346,7 +340,7 @@ class RAGAgent:
         response = await self.synthesizer.synthesize(plan, results)
         
         if verbose:
-            print(f"\nTotal time: {response.total_time_ms:.1f}ms")
+            logger.info(f"Total time: {response.total_time_ms:.1f}ms")
         
         return response
     

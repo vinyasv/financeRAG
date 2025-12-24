@@ -60,7 +60,7 @@ def validate_query_input(query: str) -> tuple[bool, str]:
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Query the UltimateRAG knowledge base",
+        description="Query the Finance RAG knowledge base",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -162,7 +162,7 @@ def export_to_pdf(output_path: Path, results: list[dict]):
     
     # Title
     pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(0, 10, "UltimateRAG Query Report", ln=True, align="C")
+    pdf.cell(0, 10, "Finance RAG Query Report", ln=True, align="C")
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(0, 6, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
     pdf.ln(10)
@@ -212,7 +212,7 @@ def export_to_pdf(output_path: Path, results: list[dict]):
 
 async def interactive_mode(agent: RAGAgent, model_name: str | None):
     """Run in interactive mode."""
-    print("UltimateRAG Interactive Query Mode")
+    print("Finance RAG Interactive Query Mode")
     if model_name:
         print(f"Model: {model_name}")
     print("Commands: 'quit', 'stats', 'models'")

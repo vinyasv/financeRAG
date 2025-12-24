@@ -79,7 +79,7 @@ def validate_file_for_ingestion(file_path: Path) -> tuple[bool, str]:
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Ingest documents into the UltimateRAG knowledge base",
+        description="Ingest documents into the Finance RAG knowledge base",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

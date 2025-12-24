@@ -1,2 +1,2 @@
-"""Tests for UltimateRAG."""
+"""Tests for Finance RAG."""
 

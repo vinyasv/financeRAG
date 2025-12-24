@@ -1,4 +1,4 @@
-"""Configuration for UltimateRAG."""
+"""Configuration for Finance RAG."""
 
 import os
 from pathlib import Path

@@ -258,8 +258,6 @@ class SQLiteStore:
         Creates a real SQL table with proper columns instead of EAV format.
         This allows direct SQL queries like: SELECT * FROM table_name WHERE col = value
         """
-        import pandas as pd
-        
         with self._get_connection() as conn:
             cursor = conn.cursor()
             

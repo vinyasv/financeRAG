@@ -1,4 +1,4 @@
-"""Embedding providers for UltimateRAG."""
+"""Embedding providers for Finance RAG."""
 
 import os
 from abc import ABC, abstractmethod
