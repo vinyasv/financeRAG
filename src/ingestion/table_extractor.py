@@ -2,10 +2,17 @@
 
 from typing import Any
 import hashlib
-import re
 
 from ..models import ExtractedTable, ColumnType
 from .pdf_parser import ParsedPDF
+from .utils import (
+    parse_numeric,
+    is_numeric,
+    normalize_column_name,
+    table_to_text,
+    HEADER_ROW_MIN_FILL_RATIO,
+    HEADER_ROW_TEXT_RATIO,
+)
 
 
 class TableExtractor:
@@ -115,26 +122,18 @@ class TableExtractor:
             # Count non-empty cells
             non_empty = sum(1 for cell in row if cell and cell.strip())
             
-            # Consider it a header if at least 50% of cells are non-empty
-            if len(row) > 0 and non_empty >= len(row) * 0.5:
+            # Consider it a header if enough cells are non-empty
+            if len(row) > 0 and non_empty >= len(row) * HEADER_ROW_MIN_FILL_RATIO:
                 # Check if cells look like headers (more text than numbers)
-                text_cells = sum(1 for cell in row if cell and not self._is_numeric(cell))
-                if text_cells >= non_empty * 0.5:
+                text_cells = sum(1 for cell in row if cell and not is_numeric(cell))
+                if text_cells >= non_empty * HEADER_ROW_TEXT_RATIO:
                     return i
         
         return 0 if table else None
     
     def _normalize_header(self, header: str) -> str:
         """Normalize a header string to a valid column name."""
-        if not header:
-            return ""
-        
-        # Convert to lowercase and replace spaces/special chars with underscore
-        normalized = header.lower().strip()
-        normalized = re.sub(r'[^a-z0-9]+', '_', normalized)
-        normalized = normalized.strip('_')
-        
-        return normalized
+        return normalize_column_name(header)
     
     def _parse_value(self, value: str) -> Any:
         """Parse a cell value to appropriate type."""
@@ -144,44 +143,16 @@ class TableExtractor:
         value = value.strip()
         
         # Try to parse as number
-        numeric = self._parse_numeric(value)
+        numeric = parse_numeric(value)
         if numeric is not None:
             return numeric
         
         return value
     
-    def _parse_numeric(self, value: str) -> float | None:
-        """Try to parse a string as a number."""
-        if not value:
-            return None
-        
-        # Remove common formatting
-        cleaned = value.replace(",", "").replace("$", "").replace("%", "").strip()
-        
-        # Handle accounting notation (negative in parentheses)
-        if cleaned.startswith("(") and cleaned.endswith(")"):
-            cleaned = "-" + cleaned[1:-1]
-        
-        # Handle K/M/B suffixes
-        multiplier = 1
-        if cleaned.endswith("K"):
-            multiplier = 1000
-            cleaned = cleaned[:-1]
-        elif cleaned.endswith("M"):
-            multiplier = 1000000
-            cleaned = cleaned[:-1]
-        elif cleaned.endswith("B"):
-            multiplier = 1000000000
-            cleaned = cleaned[:-1]
-        
-        try:
-            return float(cleaned) * multiplier
-        except ValueError:
-            return None
-    
+
     def _is_numeric(self, value: str) -> bool:
         """Check if a value appears to be numeric."""
-        return self._parse_numeric(value) is not None
+        return is_numeric(value)
     
     def _generate_table_id(self, document_id: str, page_number: int, columns: list[str]) -> str:
         """Generate a unique table ID."""
@@ -216,16 +187,5 @@ class TableExtractor:
     
     def _table_to_text(self, columns: list[str], rows: list[dict]) -> str:
         """Convert table to readable text format."""
-        lines = []
-        
-        # Header
-        lines.append(" | ".join(columns))
-        lines.append("-" * len(lines[0]))
-        
-        # Rows
-        for row in rows:
-            row_values = [str(row.get(col, "")) for col in columns]
-            lines.append(" | ".join(row_values))
-        
-        return "\n".join(lines)
+        return table_to_text(columns, rows)
 

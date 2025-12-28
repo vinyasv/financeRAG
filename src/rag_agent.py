@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from .models import ExecutionPlan, QueryResponse, Document, TextChunk, ExtractedTable
+from .models import QueryResponse, Document, TextChunk, ExtractedTable
 from .config import config
 from .agent.planner import Planner
 from .agent.executor import DAGExecutor, ExecutionMonitor
@@ -17,6 +17,7 @@ from .tools.get_document import GetDocumentTool
 from .storage.sqlite_store import SQLiteStore
 from .storage.chroma_store import ChromaStore
 from .storage.document_store import DocumentStore
+from .storage.schema_cluster import SchemaClusterManager
 from .ingestion.pdf_parser import PDFParser
 from .ingestion.table_extractor import TableExtractor
 from .ingestion.vision_table_extractor import VisionTableExtractor
@@ -41,6 +42,9 @@ class RAGAgent:
     # Supported file types for ingestion
     SUPPORTED_EXTENSIONS = {'.pdf', '.xlsx', '.xls', '.csv'}
     
+    # Number of sample rows to include in vector search chunk for spreadsheets
+    SPREADSHEET_SAMPLE_ROWS = 25
+    
     def __init__(self, llm_client: Any = None):
         """
         Initialize the RAG agent.
@@ -56,11 +60,19 @@ class RAGAgent:
         self.chroma_store = ChromaStore()
         self.document_store = DocumentStore()
         
+        # Schema clustering for scalable context (must be before SQL tool)
+        # Pass llm_client for dynamic company learning
+        self.schema_cluster_manager = SchemaClusterManager(
+            sqlite_store=self.sqlite_store,
+            llm_client=llm_client
+        )
+        
         # Initialize tools
         self.calculator = CalculatorTool()
         self.sql_query = SQLQueryTool(
             sqlite_store=self.sqlite_store,
-            llm_client=llm_client
+            llm_client=llm_client,
+            schema_cluster_manager=self.schema_cluster_manager
         )
         self.vector_search = VectorSearchTool(chroma_store=self.chroma_store)
         self.get_document = GetDocumentTool(document_store=self.document_store)
@@ -137,6 +149,12 @@ class RAGAgent:
         # Generate document ID
         doc_id = PDFParser.generate_document_id(pdf_path.name)
         
+        # Check if document already exists (deduplication)
+        existing_doc = self.sqlite_store.get_document(doc_id)
+        if existing_doc:
+            logger.info(f"Document already ingested: {pdf_path.name} (id={doc_id}), skipping")
+            return existing_doc
+        
         # Extract temporal metadata from filename
         temporal_meta = extract_temporal_metadata(pdf_path.name, parsed.metadata)
         
@@ -156,6 +174,9 @@ class RAGAgent:
             source_path=pdf_path,
             full_text=parsed.full_text
         )
+        
+        # Learn company from document filename using LLM
+        await self.schema_cluster_manager.learn_company_from_document(pdf_path.name)
         
         # Extract and save tables
         tables = []
@@ -177,10 +198,18 @@ class RAGAgent:
         for table in tables:
             # Always enhance schema with LLM for better column/table names
             if self.llm_client:
-                logger.debug(f"Enhancing schema for table: {table.table_name[:40]}")
+                logger.debug(f"Enhancing schema for table: {(table.table_name or '')[:40]}")
                 table = await self.schema_detector.detect_schema(table)
                 logger.debug(f"Renamed to: {table.table_name}")
             self.sqlite_store.save_table(table)
+            
+            # Assign table to cluster for scalable context (LLM classification)
+            await self.schema_cluster_manager.assign_table(
+                table_name=table.table_name,
+                columns=table.columns,
+                schema_description=table.schema_description,
+                source_document=pdf_path.name
+            )
         
         # Chunk text and store in vector DB
         chunks = self.chunker.chunk_document(parsed, doc_id)
@@ -210,12 +239,22 @@ class RAGAgent:
         
         logger.info(f"Parsing spreadsheet: {file_path.name}")
         
+        # Learn company from document filename using LLM
+        await self.schema_cluster_manager.learn_company_from_document(file_path.name)
+        
         for sheet in parsed.sheets:
             # Generate unique ID for this sheet
             doc_id = SpreadsheetParser.generate_document_id(
                 file_path.name, 
                 sheet.sheet_name
             )
+            
+            # Check if sheet already exists (deduplication)
+            existing_doc = self.sqlite_store.get_document(doc_id)
+            if existing_doc:
+                logger.info(f"Sheet already ingested: {sheet.sheet_name} (id={doc_id}), skipping")
+                documents.append(existing_doc)
+                continue
             
             # Create document record
             doc = Document(
@@ -250,6 +289,14 @@ class RAGAgent:
                     df=sheet.dataframe,
                     doc_id=doc_id
                 )
+                
+                # Assign table to cluster for scalable context (LLM classification)
+                await self.schema_cluster_manager.assign_table(
+                    table_name=table_name,
+                    columns=sheet.headers,
+                    schema_description=f"Spreadsheet data from {sheet.sheet_name}",
+                    source_document=file_path.name
+                )
             else:
                 # Fallback to EAV format for compatibility
                 table = ExtractedTable(
@@ -262,11 +309,19 @@ class RAGAgent:
                     rows=sheet.rows
                 )
                 self.sqlite_store.save_table(table)
+                
+                # Assign table to cluster (was missing in original code)
+                await self.schema_cluster_manager.assign_table(
+                    table_name=table_name,
+                    columns=sheet.headers,
+                    schema_description=table.schema_description,
+                    source_document=file_path.name
+                )
             
             # Create text chunk for vector search with spreadsheet-specific metadata
             # Note: For spreadsheets, we use section_title for sheet name and
             # start_line/end_line to indicate the row range in the sample
-            sample_rows = min(25, sheet.row_count)  # We show first 25 rows in raw_text
+            sample_rows = min(self.SPREADSHEET_SAMPLE_ROWS, sheet.row_count)
             chunk = TextChunk(
                 id=ChromaStore.generate_chunk_id(doc_id, 0),
                 document_id=doc_id,
@@ -364,6 +419,7 @@ class RAGAgent:
             "spreadsheet_sheet_count": len(spreadsheet_docs),
             "table_count": len(tables),
             "chunk_count": chunk_count,
+            "schema_clusters": self.schema_cluster_manager.get_stats(),
             "documents": [
                 {
                     "id": d.id, 

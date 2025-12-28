@@ -1,9 +1,9 @@
 """ChromaDB storage for text embeddings and vector search."""
 
 from pathlib import Path
-from typing import Any
 import hashlib
 import os
+import threading
 
 from ..models import TextChunk
 from ..config import config
@@ -25,42 +25,50 @@ class ChromaStore:
         self,
         persist_path: Path | None = None,
         collection_name: str = "documents",
-        embedding_provider: str = "auto",
+        embedding_provider: str | None = None,
     ):
         self.persist_path = persist_path or config.chroma_path
         self.collection_name = collection_name
-        self.embedding_provider = embedding_provider
+        self.embedding_provider = embedding_provider or config.embedding_provider
         self._client = None
         self._collection = None
         self._embedding_function = None
+        self._init_lock = threading.Lock()
     
     def _ensure_initialized(self):
-        """Lazy initialization of ChromaDB client and collection."""
+        """
+        Lazy initialization of ChromaDB client and collection.
+        
+        Thread-safe using double-checked locking pattern.
+        """
         if self._client is None:
-            import chromadb
-            from chromadb.config import Settings
-            
-            # Create persist directory if needed
-            self.persist_path.mkdir(parents=True, exist_ok=True)
-            
-            # Initialize client with persistence
-            self._client = chromadb.PersistentClient(
-                path=str(self.persist_path),
-                settings=Settings(anonymized_telemetry=False)
-            )
-            
-            # Get or create collection with embedding function
-            self._embedding_function = self._get_embedding_function()
-            self._collection = self._client.get_or_create_collection(
-                name=self.collection_name,
-                embedding_function=self._embedding_function,
-                metadata={
-                    "hnsw:space": "cosine",      # Use cosine similarity
-                    "hnsw:M": 32,                 # Increased from 16 for better recall
-                    "hnsw:construction_ef": 200,  # Higher quality index construction
-                    "hnsw:search_ef": 100,        # Much higher search depth for large KB
-                }
-            )
+            with self._init_lock:
+                # Double-check after acquiring lock
+                if self._client is None:
+                    import chromadb
+                    from chromadb.config import Settings
+                    
+                    # Create persist directory if needed
+                    self.persist_path.mkdir(parents=True, exist_ok=True)
+                    
+                    # Initialize client with persistence
+                    self._client = chromadb.PersistentClient(
+                        path=str(self.persist_path),
+                        settings=Settings(anonymized_telemetry=False)
+                    )
+                    
+                    # Get or create collection with embedding function
+                    self._embedding_function = self._get_embedding_function()
+                    self._collection = self._client.get_or_create_collection(
+                        name=self.collection_name,
+                        embedding_function=self._embedding_function,
+                        metadata={
+                            "hnsw:space": "cosine",      # Use cosine similarity
+                            "hnsw:M": 32,                 # Increased from 16 for better recall
+                            "hnsw:construction_ef": 200,  # Higher quality index construction
+                            "hnsw:search_ef": 100,        # Much higher search depth for large KB
+                        }
+                    )
     
     def _get_embedding_function(self):
         """Get the embedding function based on config."""
@@ -79,7 +87,7 @@ class ChromaStore:
         # Fall back to local sentence-transformers
         from chromadb.utils import embedding_functions
         return embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=config.embedding_model
+            model_name=config.local_embedding_model
         )
     
     # =========================================================================

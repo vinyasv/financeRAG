@@ -36,6 +36,9 @@ python scripts/query.py "What was 2024 revenue growth?"
 |---------|-------------|
 | **Parallel Execution** | DAG-based tool execution for maximum speed |
 | **Smart Table Extraction** | Vision-based (VLM) or rule-based PDF table parsing |
+| **CSV/Spreadsheet Support** | Native ingestion of CSV and multi-sheet Excel files |
+| **Temporal Queries** | Fiscal year/quarter metadata extraction for time-based analysis |
+| **Schema Clustering** | Automatic grouping of tables by company and document |
 | **FlashRank Reranking** | Ultra-fast reranking (~10-50ms) for precise retrieval |
 | **Audit Transparency** | Calculation transcripts with operand provenance |
 | **Multi-Provider LLM** | OpenRouter, OpenAI, Anthropic, local models |
@@ -70,7 +73,8 @@ Query → Planner → Execution DAG → Parallel Tools → Response
 ### Ingestion
 
 ```bash
-python scripts/ingest.py document.pdf          # Single file
+python scripts/ingest.py document.pdf          # Single PDF
+python scripts/ingest.py data.csv              # CSV/spreadsheet
 python scripts/ingest.py -f ./reports/         # Entire folder
 ```
 
@@ -133,12 +137,15 @@ EMBEDDING_PROVIDER=local           # Use local embeddings (free)
 ```
 src/
 ├── agent/          # Planner, executor, synthesizer
-├── tools/          # SQL, vector search, calculator
-├── ingestion/      # PDF parser, table extractor, chunker
-└── storage/        # SQLite, ChromaDB, document store
+├── tools/          # SQL, vector search, calculator, reranker
+├── ingestion/      # PDF/CSV parsers, table extractor, temporal extraction
+├── storage/        # SQLite, ChromaDB, schema clustering
+└── security.py     # Input validation, query limits
 scripts/
 ├── ingest.py       # Document ingestion CLI
-└── query.py        # Query CLI
+├── query.py        # Query CLI
+└── analyst_evaluation.py  # RAG accuracy evaluation
+tests/              # Unit tests for all modules
 ```
 
 See [technicaloverview.md](technicaloverview.md) for detailed architecture.

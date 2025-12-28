@@ -137,8 +137,12 @@ class DocumentStore:
         
         # Save metadata using validated ID
         metadata_file = self.metadata_path / f"{doc.id}.json"
-        with open(metadata_file, "w") as f:
-            json.dump(doc.model_dump(mode="json"), f, indent=2, default=str)
+        try:
+            with open(metadata_file, "w", encoding="utf-8") as f:
+                json.dump(doc.model_dump(mode="json"), f, indent=2, default=str)
+        except (IOError, OSError) as e:
+            logger.error(f"Failed to save document metadata: {e}")
+            raise
         
         # Copy original file if provided (use secure path joining)
         if source_path and source_path.exists():
@@ -152,8 +156,12 @@ class DocumentStore:
         # Save full text content
         if full_text:
             content_file = self.content_path / f"{doc.id}.txt"
-            with open(content_file, "w") as f:
-                f.write(full_text)
+            try:
+                with open(content_file, "w", encoding="utf-8") as f:
+                    f.write(full_text)
+            except (IOError, OSError) as e:
+                logger.error(f"Failed to save document content: {e}")
+                raise
     
     def get_document(self, doc_id: str) -> Document | None:
         """Get document metadata by ID."""
@@ -162,8 +170,12 @@ class DocumentStore:
         if not metadata_file.exists():
             return None
         
-        with open(metadata_file) as f:
-            data = json.load(f)
+        try:
+            with open(metadata_file, encoding="utf-8") as f:
+                data = json.load(f)
+        except (IOError, OSError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to read document metadata {doc_id}: {e}")
+            return None
         
         return Document(**data)
     
@@ -174,8 +186,12 @@ class DocumentStore:
         if not content_file.exists():
             return None
         
-        with open(content_file) as f:
-            return f.read()
+        try:
+            with open(content_file, encoding="utf-8") as f:
+                return f.read()
+        except (IOError, OSError) as e:
+            logger.error(f"Failed to read document content {doc_id}: {e}")
+            return None
     
     def get_section(self, doc_id: str, section_title: str) -> str | None:
         """
@@ -201,7 +217,7 @@ class DocumentStore:
             # Check if we've hit a new section (simple heuristic)
             if in_section:
                 # If line looks like a new section header, stop
-                if line.strip() and line.strip().isupper() or line.startswith("#"):
+                if (line.strip() and line.strip().isupper()) or line.startswith("#"):
                     break
                 section_lines.append(line)
         
@@ -224,9 +240,12 @@ class DocumentStore:
         documents = []
         
         for metadata_file in self.metadata_path.glob("*.json"):
-            with open(metadata_file) as f:
-                data = json.load(f)
-            documents.append(Document(**data))
+            try:
+                with open(metadata_file, encoding="utf-8") as f:
+                    data = json.load(f)
+                documents.append(Document(**data))
+            except (IOError, OSError, json.JSONDecodeError) as e:
+                logger.warning(f"Skipping corrupted metadata file {metadata_file}: {e}")
         
         return sorted(documents, key=lambda d: d.ingested_at, reverse=True)
     

@@ -1,11 +1,18 @@
 """SQL query tool for structured data queries."""
 
+import asyncio
+import logging
+import sqlite3
 from typing import Any
-import json
 
 from .base import Tool
 from ..models import ToolName, SQLQueryResult
 from ..storage.sqlite_store import SQLiteStore, SecurityError
+
+logger = logging.getLogger(__name__)
+
+# Timeout for LLM SQL generation (seconds)
+LLM_TIMEOUT_SECONDS = 30
 
 
 # Prompt for converting natural language to SQL
@@ -54,9 +61,15 @@ class SQLQueryTool(Tool):
     name = ToolName.SQL_QUERY
     description = "Query structured data extracted from documents. Use for numbers, metrics, comparisons."
     
-    def __init__(self, sqlite_store: SQLiteStore | None = None, llm_client: Any = None):
+    def __init__(
+        self, 
+        sqlite_store: SQLiteStore | None = None, 
+        llm_client: Any = None,
+        schema_cluster_manager: Any = None
+    ):
         self.sqlite_store = sqlite_store or SQLiteStore()
         self.llm_client = llm_client
+        self.schema_cluster_manager = schema_cluster_manager
     
     async def execute(self, input_str: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
         """
@@ -99,9 +112,14 @@ class SQLQueryTool(Tool):
         except SecurityError as e:
             # Security violation - return sanitized error without SQL details
             return {"error": f"Query not allowed: {str(e)}"}
-        except Exception as e:
-            # Other errors - log internally but don't expose SQL to response
+        except sqlite3.Error as e:
+            # Database errors - log but don't expose SQL details
+            logger.warning(f"SQL execution error for query '{input_str[:50]}...': {e}")
             return {"error": "Query execution failed. Please try rephrasing your question."}
+        except Exception as e:
+            # Unexpected errors - log and re-raise for debugging
+            logger.exception(f"Unexpected error in SQL query tool for: {input_str[:50]}...")
+            raise
     
     async def _generate_sql(self, query: str) -> str:
         """Convert natural language to SQL."""
@@ -111,15 +129,30 @@ class SQLQueryTool(Tool):
             return self._generate_sql_heuristic(query)
     
     async def _generate_sql_with_llm(self, query: str) -> str:
-        """Use LLM to generate SQL."""
-        schema = self.sqlite_store.get_schema_for_llm()
+        """Use LLM to generate SQL with clustered schema context."""
+        # Use cluster manager for focused schema if available
+        if self.schema_cluster_manager:
+            schema = self.schema_cluster_manager.get_schemas_for_query(
+                query=query,
+                sqlite_store=self.sqlite_store
+            )
+        else:
+            # Fallback: include all schemas (original behavior)
+            schema = self.sqlite_store.get_schema_for_llm()
         
         prompt = NL_TO_SQL_PROMPT.format(
             schema=schema,
             query=query
         )
         
-        response = await self.llm_client.generate(prompt)
+        try:
+            response = await asyncio.wait_for(
+                self.llm_client.generate(prompt),
+                timeout=LLM_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"LLM SQL generation timed out after {LLM_TIMEOUT_SECONDS}s")
+            raise ValueError("SQL generation timed out. Please try a simpler query.")
         
         # Clean up response
         sql = response.strip()
@@ -194,11 +227,31 @@ class SQLExecutor:
                 rows=rows,
                 row_count=len(rows)
             )
-        except Exception as e:
+        except SecurityError as e:
+            logger.warning(f"Security error in SQLExecutor: {e}")
             return SQLQueryResult(
                 query=sql,
                 columns=[],
                 rows=[],
-                row_count=0
+                row_count=0,
+                error=f"Query not allowed: {e}"
+            )
+        except sqlite3.Error as e:
+            logger.warning(f"SQLExecutor database error: {e}")
+            return SQLQueryResult(
+                query=sql,
+                columns=[],
+                rows=[],
+                row_count=0,
+                error=f"Database error: {e}"
+            )
+        except Exception as e:
+            logger.exception(f"Unexpected error in SQLExecutor")
+            return SQLQueryResult(
+                query=sql,
+                columns=[],
+                rows=[],
+                row_count=0,
+                error=f"Unexpected error: {e}"
             )
 

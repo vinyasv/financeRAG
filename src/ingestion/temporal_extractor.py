@@ -4,14 +4,6 @@ import re
 from typing import Any
 
 
-# Common patterns for fiscal years in filenames
-FISCAL_YEAR_PATTERNS = [
-    # 4-digit year: 2024, 2023
-    r'(?:FY|fy)?[_\s-]?(20\d{2})',
-    # FY25, FY24 format
-    r'(?:FY|fy)[_\s-]?(\d{2})(?!\d)',
-]
-
 # Patterns for fiscal quarters
 FISCAL_QUARTER_PATTERNS = [
     r'(Q[1-4])',  # Q1, Q2, Q3, Q4

@@ -16,12 +16,15 @@ from src.rag_agent import RAGAgent
 from src.llm_client import get_llm_client
 from src.security import validate_file_size, validate_path_safety
 
-# Configure logging
+# Configure logging - write to data directory, not CWD
+log_dir = config.data_path / "logs"
+log_dir.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('ingest.log'),
+        logging.FileHandler(log_dir / 'ingest.log'),
         logging.StreamHandler()
     ]
 )

@@ -36,6 +36,30 @@ FORBIDDEN_SQL_KEYWORDS = {
 MAX_SQL_RESULT_ROWS = 10000
 
 
+def validate_identifier(name: str) -> str:
+    """
+    Validate that a string is a safe SQL identifier (table/column name).
+    
+    Prevents SQL injection in DDL statements where parameterization isn't possible.
+    
+    Args:
+        name: The identifier to validate
+        
+    Returns:
+        The validated identifier (unchanged if valid)
+        
+    Raises:
+        SecurityError: If the identifier contains unsafe characters
+    """
+    if not name:
+        raise SecurityError("Empty identifier not allowed")
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+        raise SecurityError(f"Invalid SQL identifier: {name}")
+    if len(name) > 63:
+        raise SecurityError(f"Identifier too long (max 63): {name}")
+    return name
+
+
 def validate_sql_query(sql: str) -> tuple[bool, str]:
     """
     Validate that a SQL query is safe to execute.
@@ -179,7 +203,30 @@ class SQLiteStore:
                 )
             """)
             
+            # Schema clusters for scalable context management
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS schema_clusters (
+                    cluster_id TEXT PRIMARY KEY,
+                    company TEXT NOT NULL,
+                    domain_id TEXT NOT NULL,
+                    table_names TEXT NOT NULL,
+                    keywords TEXT NOT NULL,
+                    centroid BLOB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Index for fast company lookup
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_schema_clusters_company 
+                ON schema_clusters(company)
+            """)
+            
             conn.commit()
+            
+            # Enable WAL mode for better concurrency
+            conn.execute("PRAGMA journal_mode=WAL")
     
     @contextmanager
     def _get_connection(self):
@@ -287,6 +334,9 @@ class SQLiteStore:
                 # Create unique table name (include doc context to avoid collisions)
                 native_table_name = self._make_unique_table_name(table.table_name, table.document_id)
                 
+                # Validate table name before DDL
+                validate_identifier(native_table_name)
+                
                 # Drop existing table
                 conn.execute(f'DROP TABLE IF EXISTS "{native_table_name}"')
                 
@@ -315,7 +365,16 @@ class SQLiteStore:
             conn.commit()
     
     def _make_unique_table_name(self, table_name: str, doc_id: str) -> str:
-        """Create a unique table name with document context."""
+        """
+        Create a unique, SQL-safe table name with document context.
+        
+        Args:
+            table_name: Base table name
+            doc_id: Document ID for prefix
+            
+        Returns:
+            Sanitized table name (max 63 chars, alphanumeric + underscore)
+        """
         # Get document info for context
         doc = self.get_document(doc_id)
         if doc:
@@ -325,7 +384,21 @@ class SQLiteStore:
         return f"{doc_id[:8]}_{table_name}"[:63]
     
     def _parse_numeric(self, value: Any) -> float | None:
-        """Try to parse a value as a number."""
+        """
+        Try to parse a value as a number for SQL storage.
+        
+        Handles common financial formatting:
+        - Thousands separators (commas)
+        - Currency symbols ($)
+        - Percentage signs (%)
+        - Accounting notation for negatives (parentheses)
+        
+        Args:
+            value: The value to parse
+            
+        Returns:
+            Float if parseable, None otherwise
+        """
         if value is None:
             return None
         
@@ -360,6 +433,9 @@ class SQLiteStore:
             doc_id: Document ID for tracking
         """
         with self._get_connection() as conn:
+            # Validate table name before DDL
+            validate_identifier(table_name)
+            
             # Drop existing table if it exists
             conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
             
@@ -432,10 +508,14 @@ class SQLiteStore:
             for keyword in index_keywords:
                 if keyword in col_lower:
                     try:
+                        # Validate identifiers before index creation
+                        validate_identifier(table_name)
+                        validate_identifier(col)
                         index_name = f"idx_{table_name}_{col}"
+                        validate_identifier(index_name)
                         conn.execute(f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{table_name}"("{col}")')
-                    except Exception:
-                        pass  # Skip if index creation fails
+                    except (SecurityError, Exception):
+                        pass  # Skip if validation or creation fails
                     break
     
     def list_spreadsheet_tables(self) -> list[dict]:
@@ -639,5 +719,90 @@ class SQLiteStore:
                         schema_parts.append(f"--   ... and {len(columns) - 10} more columns")
         
         return "\n".join(schema_parts)
-
+    
+    # =========================================================================
+    # Schema Cluster Operations
+    # =========================================================================
+    
+    def save_cluster(self, cluster_data: dict) -> None:
+        """
+        Save or update a schema cluster.
+        
+        Args:
+            cluster_data: Dict with cluster_id, company, domain_id, table_names, keywords
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO schema_clusters 
+                (cluster_id, company, domain_id, table_names, keywords, centroid, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (
+                cluster_data["cluster_id"],
+                cluster_data["company"],
+                cluster_data["domain_id"],
+                json.dumps(cluster_data.get("table_names", [])),
+                json.dumps(cluster_data.get("keywords", [])),
+                cluster_data.get("centroid")  # Can be None or bytes
+            ))
+            conn.commit()
+    
+    def get_all_clusters(self) -> list[dict]:
+        """Get all schema clusters."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT cluster_id, company, domain_id, table_names, keywords, centroid
+                FROM schema_clusters
+            """)
+            
+            return [
+                {
+                    "cluster_id": row["cluster_id"],
+                    "company": row["company"],
+                    "domain_id": row["domain_id"],
+                    "table_names": json.loads(row["table_names"]),
+                    "keywords": json.loads(row["keywords"]),
+                    "centroid": row["centroid"]
+                }
+                for row in cursor.fetchall()
+            ]
+    
+    def get_cluster(self, cluster_id: str) -> dict | None:
+        """Get a specific cluster by ID."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT cluster_id, company, domain_id, table_names, keywords, centroid
+                FROM schema_clusters
+                WHERE cluster_id = ?
+            """, (cluster_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+            return {
+                "cluster_id": row["cluster_id"],
+                "company": row["company"],
+                "domain_id": row["domain_id"],
+                "table_names": json.loads(row["table_names"]),
+                "keywords": json.loads(row["keywords"]),
+                "centroid": row["centroid"]
+            }
+    
+    def delete_cluster(self, cluster_id: str) -> None:
+        """Delete a cluster."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM schema_clusters WHERE cluster_id = ?", (cluster_id,))
+            conn.commit()
+    
+    def clear_all_clusters(self) -> None:
+        """Clear all clusters (for re-ingestion)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM schema_clusters")
+            conn.commit()
+            logger.info("Cleared all schema clusters")
 

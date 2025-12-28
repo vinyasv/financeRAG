@@ -4,7 +4,8 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timezone
+import hashlib
 
 
 # =============================================================================
@@ -78,7 +79,7 @@ class Document(BaseModel):
     id: str = Field(..., description="Unique document identifier")
     filename: str = Field(..., description="Original filename")
     title: str | None = Field(default=None, description="Document title")
-    ingested_at: datetime = Field(default_factory=datetime.utcnow)
+    ingested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     page_count: int = Field(default=0, description="Number of pages")
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -221,6 +222,7 @@ class SQLQueryResult(BaseModel):
     columns: list[str] = Field(default_factory=list)
     rows: list[dict[str, Any]] = Field(default_factory=list)
     row_count: int = Field(default=0)
+    error: str | None = Field(default=None, description="Error message if query failed")
 
 
 class VectorSearchResult(BaseModel):
@@ -382,7 +384,6 @@ class FieldDefinition(BaseModel):
     def compute_hash(cls, field_name: str, accounting_standard: str, segment_scope: str | None, 
                      includes: list[str], excludes: list[str]) -> str:
         """Compute a deterministic hash for field definition matching."""
-        import hashlib
         canonical = f"{field_name.lower()}|{accounting_standard}|{segment_scope or ''}|{','.join(sorted(includes))}|{','.join(sorted(excludes))}"
         return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 

@@ -28,18 +28,22 @@ class VectorSearchTool(Tool):
         self.n_results = n_results
         self.use_reranking = use_reranking
         self._reranker = None
+        self._reranker_init_failed = False  # Track initialization failure separately
     
     @property
     def reranker(self):
-        """Lazy-load reranker only when needed."""
-        if self._reranker is None and self.use_reranking:
+        """
+        Lazy-load reranker only when needed.
+        
+        Returns None if reranking is disabled or initialization failed.
+        """
+        if self._reranker is None and self.use_reranking and not self._reranker_init_failed:
             try:
                 from .reranker import Reranker
                 self._reranker = Reranker()
             except ImportError:
-                # sentence-transformers not available
-                self._reranker = None
-                self.use_reranking = False
+                # Track failure separately to avoid repeated import attempts
+                self._reranker_init_failed = True
         return self._reranker
     
     async def execute(self, input_str: str, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:

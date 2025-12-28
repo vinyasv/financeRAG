@@ -3,12 +3,12 @@
 import hashlib
 import logging
 import os
-import re
 from pathlib import Path
 from typing import Any
 
 from ..models import ExtractedTable
 from ..config import config
+from .utils import parse_numeric, normalize_column_name, table_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -23,15 +23,13 @@ class VisionTableExtractor:
     This is ~5-6x faster than our previous per-table vision approach.
     """
     
-    def __init__(self, llm_client: Any = None, vision_model: str | None = None):
+    def __init__(self, vision_model: str | None = None):
         """
         Initialize the table extractor.
         
         Args:
-            llm_client: LLM client (used to get API key for OpenRouter)
             vision_model: Model to use for vision (default from config)
         """
-        self.llm_client = llm_client
         self.vision_model = vision_model or config.vision_model
         self._thepipe = None
         self._openai = None
@@ -51,9 +49,11 @@ class VisionTableExtractor:
             if not api_key:
                 return None
             
+            # Use configurable base URL with fallback to OpenRouter
+            base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
             self._openai = OpenAI(
                 api_key=api_key,
-                base_url="https://openrouter.ai/api/v1"
+                base_url=base_url
             )
         return self._openai
     
@@ -280,18 +280,7 @@ class VisionTableExtractor:
     
     def _normalize_column_name(self, name: str) -> str:
         """Normalize a column name to a valid identifier."""
-        if not name:
-            return ""
-        
-        # Convert to lowercase, replace non-alphanumeric with underscore
-        normalized = re.sub(r'[^a-z0-9]+', '_', name.lower().strip())
-        normalized = normalized.strip('_')
-        
-        # Limit length
-        if len(normalized) > 50:
-            normalized = normalized[:50]
-        
-        return normalized or ""
+        return normalize_column_name(name, max_length=50)
     
     def _process_value(self, value: Any) -> Any:
         """Process a cell value, parsing numbers where appropriate."""
@@ -318,35 +307,7 @@ class VisionTableExtractor:
     
     def _parse_numeric(self, value: str) -> float | None:
         """Try to parse a string as a number."""
-        if not value:
-            return None
-        
-        # Remove common formatting
-        cleaned = value.replace(",", "").replace("$", "").replace("%", "").strip()
-        
-        # Handle accounting notation (negative in parentheses)
-        if cleaned.startswith("(") and cleaned.endswith(")"):
-            cleaned = "-" + cleaned[1:-1]
-        
-        # Handle pts suffix (percentage points)
-        cleaned = cleaned.replace(" pts", "").replace("pts", "")
-        
-        # Handle K/M/B suffixes
-        multiplier = 1
-        if cleaned.endswith("K"):
-            multiplier = 1000
-            cleaned = cleaned[:-1]
-        elif cleaned.endswith("M"):
-            multiplier = 1000000
-            cleaned = cleaned[:-1]
-        elif cleaned.endswith("B"):
-            multiplier = 1000000000
-            cleaned = cleaned[:-1]
-        
-        try:
-            return float(cleaned) * multiplier
-        except ValueError:
-            return None
+        return parse_numeric(value)
     
     def _generate_table_name(self, columns: list[str]) -> str:
         """Generate a descriptive table name from columns."""
@@ -374,18 +335,4 @@ class VisionTableExtractor:
     
     def _build_raw_text(self, columns: list[str], rows: list[dict]) -> str:
         """Build a text representation of the table."""
-        lines = []
-        
-        # Header
-        lines.append(" | ".join(columns))
-        lines.append("-" * len(lines[0]))
-        
-        # Rows (limit to first 20 for raw text)
-        for row in rows[:20]:
-            row_values = [str(row.get(col, "") or "") for col in columns]
-            lines.append(" | ".join(row_values))
-        
-        if len(rows) > 20:
-            lines.append(f"... ({len(rows) - 20} more rows)")
-        
-        return "\n".join(lines)
+        return table_to_text(columns, rows, max_rows=20)

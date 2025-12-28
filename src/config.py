@@ -47,8 +47,8 @@ class Config:
     
     # Embedding settings (non-sensitive)
     embedding_model: str = "qwen/qwen3-embedding-8b"  # OpenRouter default
-    embedding_provider: str = "auto"  # "auto", "openrouter", or "local"
-    local_embedding_model: str = "BAAI/bge-large-en-v1.5"  # Better local model
+    embedding_provider: str = "local"  # "auto", "openrouter", or "local"
+    local_embedding_model: str = "BAAI/bge-small-en-v1.5"  # High performance, small size (133MB)
     
     # Retrieval settings
     use_reranking: bool = True  # Cross-encoder reranking for +25% precision
@@ -61,9 +61,6 @@ class Config:
     # Chunking settings
     chunk_size: int = 500
     chunk_overlap: int = 50
-    
-    # Internal: cached values from environment (not exposed)
-    _cached_llm_model: str = field(default=None, repr=False)
     
     def __post_init__(self):
         """Initialize derived paths and load non-sensitive settings."""
@@ -84,8 +81,7 @@ class Config:
         self.db_dir.mkdir(parents=True, exist_ok=True)
         
         # Load non-sensitive settings from environment
-        self._cached_llm_model = os.getenv("LLM_MODEL", self.llm_model)
-        self.llm_model = self._cached_llm_model
+        self.llm_model = os.getenv("LLM_MODEL", self.llm_model)
         self.embedding_model = os.getenv("EMBEDDING_MODEL", self.embedding_model)
         self.embedding_provider = os.getenv("EMBEDDING_PROVIDER", self.embedding_provider)
         self.vision_model = os.getenv("VISION_MODEL", self.vision_model)

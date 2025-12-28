@@ -319,7 +319,7 @@ async def run_evaluation():
     
     # Also save JSON for programmatic access
     json_path = Path(__file__).parent.parent / "analyst_evaluation_results.json"
-    with open(json_path, 'w') as f:
+    with open(json_path, 'w', encoding='utf-8') as f:
         json.dump({
             "summary": {
                 "total_queries": len(results),
@@ -353,7 +353,7 @@ def generate_markdown_report(results: list[QueryResult], stats: dict, output_pat
         f"| Total Queries | {len(results)} |",
         f"| Documents in Corpus | {stats['document_count']} |",
         f"| Total Chunks | {stats['chunk_count']} |",
-        f"| Average Response Time | {sum(r.response_time_ms for r in results)/len(results):.0f}ms |",
+        f"| Average Response Time | {sum(r.response_time_ms for r in results)/len(results) if results else 0:.0f}ms |",
         f"| Multi-Source Responses | {len([r for r in results if len(r.sources_used) > 1])} |",
         "",
         "## Query Results",
@@ -404,7 +404,7 @@ def generate_markdown_report(results: list[QueryResult], stats: dict, output_pat
         "- Response times include planning, retrieval, reranking, and synthesis",
     ])
     
-    with open(output_path, 'w') as f:
+    with open(output_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(lines))
 
 

@@ -6,6 +6,7 @@ import logging
 
 from ..models import ExecutionPlan, ToolCall, ToolName
 from ..security import sanitize_user_input, detect_injection_attempt, wrap_user_content
+from ..storage.schema_cluster import CompanyRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -190,8 +191,10 @@ class Planner:
         for pattern in simple_patterns:
             if query_lower.startswith(pattern):
                 # Check it's not actually complex (multiple companies mentioned)
-                company_count = sum(1 for c in ['nvidia', 'apple', 'microsoft', 
-                    'google', 'jpmorgan', 'berkshire', 'amazon'] if c in query_lower)
+                # Use CompanyRegistry for dynamic company detection
+                registry = CompanyRegistry()
+                known_companies = set(registry.companies.keys())
+                company_count = sum(1 for c in known_companies if c.lower() in query_lower)
                 if company_count <= 1:
                     return True  # Simple single-entity query
         
@@ -289,17 +292,40 @@ class Planner:
             
             plan_data = json.loads(json_str)
             
-            # Convert to ExecutionPlan
-            steps = [
-                ToolCall(
+            # Validate required structure
+            if "steps" not in plan_data or not isinstance(plan_data["steps"], list):
+                raise ValueError("Missing or invalid 'steps' array in LLM response")
+            
+            # Valid tool names for validation
+            valid_tools = {t.value for t in ToolName}
+            
+            # Validate and convert steps
+            steps = []
+            for i, step in enumerate(plan_data["steps"]):
+                # Validate required fields
+                if "id" not in step:
+                    raise ValueError(f"Step {i} missing required 'id' field")
+                if "tool" not in step:
+                    raise ValueError(f"Step {i} missing required 'tool' field")
+                if "input" not in step:
+                    raise ValueError(f"Step {i} missing required 'input' field")
+                
+                # Validate tool name before creating ToolName enum
+                tool_name = step["tool"]
+                if tool_name not in valid_tools:
+                    logger.warning(f"Invalid tool name '{tool_name}' in step {step['id']}, skipping step")
+                    continue
+                
+                steps.append(ToolCall(
                     id=step["id"],
-                    tool=ToolName(step["tool"]),
+                    tool=ToolName(tool_name),
                     input=step["input"],
                     depends_on=step.get("depends_on", []),
                     description=step.get("description", "")
-                )
-                for step in plan_data["steps"]
-            ]
+                ))
+            
+            if not steps:
+                raise ValueError("No valid steps parsed from LLM response")
             
             return ExecutionPlan(
                 query=plan_data.get("query", query),
@@ -307,6 +333,12 @@ class Planner:
                 steps=steps
             )
             
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse LLM plan as JSON: {e}")
+            return self._plan_with_heuristics(query)
+        except ValueError as e:
+            logger.warning(f"LLM plan validation failed: {e}")
+            return self._plan_with_heuristics(query)
         except Exception as e:
             # Fall back to heuristics on parse error
             logger.warning(f"Failed to parse LLM plan: {e}")

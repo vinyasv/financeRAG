@@ -50,7 +50,7 @@ def test_sanitize_user_input():
     assert sanitize_user_input(None) == "", "None should return empty"
     print(f"  ✓ Empty input handled")
     
-    return all_passed
+    assert all_passed, "Some sanitization tests failed"
 
 
 def test_detect_injection_attempt():
@@ -100,7 +100,7 @@ def test_detect_injection_attempt():
             print(f"  ⚠️ FALSE POSITIVE: '{text[:50]}...' matched {patterns}")
             # False positives are warnings, not failures
     
-    return all_passed
+    assert all_passed, "Some injection detection tests failed"
 
 
 def test_wrap_user_content():
@@ -118,7 +118,7 @@ def test_wrap_user_content():
     print(f"  ✓ Content wrapped correctly:")
     print(f"    {wrapped}")
     
-    return True
+    assert True  # All checks above passed
 
 
 def test_path_validation():
@@ -162,7 +162,7 @@ def test_path_validation():
             print(f"  ✗ BLOCKED: '{path}' ({error})")
             all_passed = False
     
-    return all_passed
+    assert all_passed, "Some path validation tests failed"
 
 
 def test_file_size_validation():
@@ -181,7 +181,7 @@ def test_file_size_validation():
     assert not is_valid, "600MB should be invalid"
     print(f"  ✓ 600MB exceeds 500MB limit: {error}")
     
-    return True
+    assert True  # All checks above passed
 
 
 def main():

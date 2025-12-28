@@ -2,7 +2,6 @@
 
 import os
 from abc import ABC, abstractmethod
-from typing import Any
 import asyncio
 
 from .config import config
@@ -26,7 +25,7 @@ OPENROUTER_EMBEDDING_MODELS = {
 }
 
 # Default model
-DEFAULT_EMBEDDING_MODEL = "qwen/qwen3-embedding-8b"
+DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-embedding-8b"
 
 
 class EmbeddingProvider(ABC):
@@ -67,20 +66,11 @@ class OpenRouterEmbeddings(EmbeddingProvider):
             raise ValueError("OPENROUTER_API_KEY is required for OpenRouter embeddings")
         
         # Resolve model name
-        model = model or os.getenv("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
+        model = model or os.getenv("EMBEDDING_MODEL") or DEFAULT_OPENROUTER_MODEL
         if model in OPENROUTER_EMBEDDING_MODELS:
             self.model = OPENROUTER_EMBEDDING_MODELS[model]
         else:
             self.model = model
-        
-        self._session = None
-    
-    def _get_session(self):
-        """Get or create aiohttp session."""
-        if self._session is None:
-            import aiohttp
-            self._session = aiohttp.ClientSession()
-        return self._session
     
     async def _embed_async(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings asynchronously."""
@@ -141,17 +131,17 @@ class LocalEmbeddings(EmbeddingProvider):
     Local embedding provider using sentence-transformers.
     
     Free, works offline, no API key needed.
-    Uses BGE-large by default for better retrieval performance.
+    Uses the model specified in config.local_embedding_model by default.
     """
     
-    def __init__(self, model_name: str = "BAAI/bge-large-en-v1.5"):
+    def __init__(self, model_name: str | None = None):
         """
         Initialize local embeddings.
         
         Args:
-            model_name: sentence-transformers model name
+            model_name: sentence-transformers model name (defaults to config.local_embedding_model)
         """
-        self.model_name = model_name
+        self.model_name = model_name or config.local_embedding_model
         self._model = None
     
     def _ensure_model(self):
@@ -197,12 +187,9 @@ class ChromaEmbeddingFunction:
         """Embed documents (for adding to collection)."""
         return self.provider.embed(input)
     
-    def embed_query(self, input: str | list[str]) -> list[float] | list[list[float]]:
+    def embed_query(self, input: str) -> list[float]:
         """Embed query text (for searching)."""
-        if isinstance(input, str):
-            return self.provider.embed_query(input)
-        else:
-            return self.provider.embed(input)
+        return self.provider.embed_query(input)
     
     def name(self) -> str:
         """Return embedding function name for ChromaDB."""
@@ -228,14 +215,14 @@ def get_embedding_provider(
         if os.getenv("OPENROUTER_API_KEY"):
             return OpenRouterEmbeddings(model=model)
         else:
-            # Fall back to local
-            return LocalEmbeddings(model_name=model or "all-MiniLM-L6-v2")
+            # Fall back to local (uses config.local_embedding_model)
+            return LocalEmbeddings(model_name=model)
     
     if provider == "openrouter":
         return OpenRouterEmbeddings(model=model)
     
     if provider == "local":
-        return LocalEmbeddings(model_name=model or "all-MiniLM-L6-v2")
+        return LocalEmbeddings(model_name=model)
     
     raise ValueError(f"Unknown embedding provider: {provider}")
 

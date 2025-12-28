@@ -1,6 +1,10 @@
 """FlashRank reranking for improved retrieval accuracy."""
 
+import tempfile
+from pathlib import Path
 from typing import Any
+
+from ..models import TextChunk
 
 
 class Reranker:
@@ -27,14 +31,15 @@ class Reranker:
         """Lazy load the FlashRank model."""
         if self._ranker is None:
             from flashrank import Ranker
-            self._ranker = Ranker(model_name=self.model_name, cache_dir="/tmp/flashrank")
+            cache_dir = Path(tempfile.gettempdir()) / "flashrank"
+            self._ranker = Ranker(model_name=self.model_name, cache_dir=str(cache_dir))
     
     def rerank(
         self,
         query: str,
-        chunks: list[Any],
+        chunks: list[TextChunk],
         top_k: int = 5
-    ) -> list[tuple[Any, float]]:
+    ) -> list[tuple[TextChunk, float]]:
         """
         Rerank chunks by query-document relevance.
         
@@ -75,11 +80,11 @@ class Reranker:
     def rerank_with_scores(
         self,
         query: str,
-        chunks: list[Any],
+        chunks: list[TextChunk],
         scores: list[float],
         top_k: int = 5,
         vector_weight: float = 0.3
-    ) -> list[tuple[Any, float]]:
+    ) -> list[tuple[TextChunk, float]]:
         """
         Rerank with combined vector + reranker scores.
         

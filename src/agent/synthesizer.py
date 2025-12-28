@@ -322,6 +322,9 @@ class ResponseSynthesizer:
                             # Resolve document name from ID
                             doc_name = self._resolve_document_name(doc_id)
                             
+                            snippet = item.get("content", "")[:200]
+                            if len(item.get("content", "")) > 200:
+                                snippet += "..."
                             citations.append(Citation(
                                 document_id=doc_id,
                                 document_name=doc_name,
@@ -329,7 +332,7 @@ class ResponseSynthesizer:
                                 section=item.get("section_title"),
                                 start_line=item.get("start_line"),
                                 end_line=item.get("end_line"),
-                                text_snippet=item.get("content", "")[:200]
+                                text_snippet=snippet
                             ))
             
             elif result.tool == ToolName.GET_DOCUMENT:

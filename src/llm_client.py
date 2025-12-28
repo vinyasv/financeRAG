@@ -149,8 +149,8 @@ class OpenRouterClient(LLMClient):
         """
         self._ensure_client()
         
-        # Use specified model or default vision model
-        vision_model = model or os.getenv("VISION_MODEL", "openai/gpt-4o")
+        # Use specified model or default vision model from config
+        vision_model = model or _config.vision_model
         
         # Build extra headers for OpenRouter
         extra_headers = {}
@@ -309,5 +309,5 @@ def get_llm_client(
     if provider == "anthropic":
         return AnthropicClient(model=default_model)
     
-    return None
+    raise ValueError(f"Unknown LLM provider: {provider}. Valid options: 'auto', 'openrouter', 'openai', 'anthropic', 'none'")
 

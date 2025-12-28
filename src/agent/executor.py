@@ -1,9 +1,12 @@
 """DAG executor with parallel execution."""
 
 import asyncio
+import logging
 import re
 import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from ..models import ExecutionPlan, ToolCall, ToolResult, ToolName, CalculationTranscript
 from ..tools.base import Tool
@@ -40,12 +43,18 @@ class DAGExecutor:
             vector_search: Vector search tool instance
             get_document: Get document tool instance
         """
-        self.tools: dict[ToolName, Tool] = {
-            ToolName.CALCULATOR: calculator or CalculatorTool(),
-            ToolName.SQL_QUERY: sql_query or SQLQueryTool(),
-            ToolName.VECTOR_SEARCH: vector_search or VectorSearchTool(),
-            ToolName.GET_DOCUMENT: get_document or GetDocumentTool(),
-        }
+        self.tools: dict[ToolName, Tool] = {}
+        
+        # Calculator has no dependencies, can safely default
+        self.tools[ToolName.CALCULATOR] = calculator or CalculatorTool()
+        
+        # Other tools require dependencies - only register if provided
+        if sql_query:
+            self.tools[ToolName.SQL_QUERY] = sql_query
+        if vector_search:
+            self.tools[ToolName.VECTOR_SEARCH] = vector_search
+        if get_document:
+            self.tools[ToolName.GET_DOCUMENT] = get_document
     
     async def execute(self, plan: ExecutionPlan) -> dict[str, ToolResult]:
         """
@@ -146,7 +155,11 @@ class DAGExecutor:
                 else:
                     break
             
-            return str(value) if value is not None else "0"
+            if value is not None:
+                return str(value)
+            else:
+                logger.warning(f"Reference resolution: {ref} resolved to None, using '0'")
+                return "0"
         
         return re.sub(r'\{([^}]+)\}', replace_ref, input_str)
 

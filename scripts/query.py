@@ -19,12 +19,15 @@ from src.rag_agent import RAGAgent
 from src.llm_client import get_llm_client, OpenRouterClient
 from src.security import MAX_QUERY_LENGTH, detect_injection_attempt
 
-# Configure logging (filter sensitive data)
+# Configure logging - write to data directory, not CWD
+log_dir = config.data_path / "logs"
+log_dir.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('query.log'),
+        logging.FileHandler(log_dir / 'query.log'),
         logging.StreamHandler()
     ]
 )
@@ -132,29 +135,39 @@ def format_citations(citations) -> str:
     return "; ".join(parts)
 
 
-def export_to_csv(output_path: Path, results: list[dict]):
+def export_to_csv(output_path: Path, results: list[dict]) -> bool:
     """Export query results to CSV file."""
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["query", "answer", "citations", "response_time_ms", "timestamp"])
-        writer.writeheader()
-        writer.writerows(results)
-    print(f"\n📁 Results exported to: {output_path}")
+    try:
+        with open(output_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=["query", "answer", "citations", "response_time_ms", "timestamp"])
+            writer.writeheader()
+            writer.writerows(results)
+        print(f"\n📁 Results exported to: {output_path}")
+        return True
+    except (IOError, OSError) as e:
+        print(f"\n❌ Failed to export CSV: {e}")
+        return False
 
 
-def export_to_json(output_path: Path, results: list[dict]):
+def export_to_json(output_path: Path, results: list[dict]) -> bool:
     """Export query results to JSON file."""
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
-    print(f"\n📁 Results exported to: {output_path}")
+    try:
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+        print(f"\n📁 Results exported to: {output_path}")
+        return True
+    except (IOError, OSError) as e:
+        print(f"\n❌ Failed to export JSON: {e}")
+        return False
 
 
-def export_to_pdf(output_path: Path, results: list[dict]):
+def export_to_pdf(output_path: Path, results: list[dict]) -> bool:
     """Export query results to PDF file."""
     try:
         from fpdf import FPDF
     except ImportError:
         print("❌ PDF export requires fpdf2: pip install fpdf2")
-        return
+        return False
     
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -206,8 +219,13 @@ def export_to_pdf(output_path: Path, results: list[dict]):
         
         pdf.ln(8)
     
-    pdf.output(str(output_path))
-    print(f"\n📄 PDF report exported to: {output_path}")
+    try:
+        pdf.output(str(output_path))
+        print(f"\n📄 PDF report exported to: {output_path}")
+        return True
+    except (IOError, OSError) as e:
+        print(f"\n❌ Failed to export PDF: {e}")
+        return False
 
 
 async def interactive_mode(agent: RAGAgent, model_name: str | None):

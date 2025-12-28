@@ -5,7 +5,6 @@ prompt injection defense, and other security measures.
 """
 
 import re
-from typing import Any
 
 
 # Maximum lengths for various inputs

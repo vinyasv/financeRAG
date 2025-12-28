@@ -11,7 +11,8 @@ from src.storage.sqlite_store import (
     validate_sql_query, 
     add_limit_clause, 
     SecurityError,
-    SQLiteStore
+    SQLiteStore,
+    validate_identifier
 )
 
 
@@ -67,7 +68,7 @@ def test_validate_sql_query():
             all_passed = False
             print(f"    ⚠️  WARNING: This query should have been blocked!")
     
-    return all_passed
+    assert all_passed, "Some SQL validation tests failed"
 
 
 def test_add_limit_clause():
@@ -93,7 +94,7 @@ def test_add_limit_clause():
             print(f"     Expected: {expected}")
             all_passed = False
     
-    return all_passed
+    assert all_passed, "Some LIMIT clause tests failed"
 
 
 def test_execute_query_security():
@@ -136,7 +137,57 @@ def test_execute_query_security():
         # Other errors (like no table) are OK - we're testing security
         print(f"  ✓ Query allowed (execution error is OK): {e}")
     
-    return all_passed
+    assert all_passed, "Some execute query security tests failed"
+
+
+def test_validate_identifier():
+    """Test SQL identifier validation for DDL injection prevention."""
+    print("\n" + "=" * 60)
+    print("Testing SQL Identifier Validation")
+    print("=" * 60)
+    
+    all_passed = True
+    
+    # Valid identifiers that should pass
+    valid_identifiers = [
+        "table_name",
+        "column_with_numbers_123",
+        "_private_table",
+        "CamelCaseTable",
+    ]
+    
+    print("\n✅ Testing VALID identifiers (should pass):")
+    for identifier in valid_identifiers:
+        try:
+            result = validate_identifier(identifier)
+            print(f"  ✓: {identifier}")
+            if result != identifier:
+                print(f"    ⚠️ WARNING: Result doesn't match input!")
+                all_passed = False
+        except SecurityError as e:
+            print(f"  ✗ BLOCKED incorrectly: {identifier} → {e}")
+            all_passed = False
+    
+    # Invalid identifiers that should be blocked
+    invalid_identifiers = [
+        ("table; DROP TABLE--", "SQL injection"),
+        ("123starts_with_digit", "starts with digit"),
+        ("table name with spaces", "contains spaces"),
+        ("table-with-dashes", "contains dashes"),
+        ("", "empty"),
+        ("a" * 100, "too long"),
+    ]
+    
+    print("\n🚫 Testing INVALID identifiers (should be blocked):")
+    for identifier, reason in invalid_identifiers:
+        try:
+            validate_identifier(identifier)
+            print(f"  ✗ ALLOWED (BAD!): {identifier[:30]}... [{reason}]")
+            all_passed = False
+        except SecurityError:
+            print(f"  ✓ BLOCKED: {identifier[:30]}... [{reason}]")
+    
+    assert all_passed, "Some identifier validation tests failed"
 
 
 def main():

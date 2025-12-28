@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Any
 
-from ..models import ExtractedTable, TableColumn, ColumnType
+from ..models import ExtractedTable, ColumnType
 
 logger = logging.getLogger(__name__)
 
@@ -153,8 +153,37 @@ class SchemaDetector:
             if column_mappings:
                 table = self._apply_column_mappings(table, column_mappings)
             
+            # Extract and store temporal context if available
+            temporal_context = schema_data.get("temporal_context")
+            if temporal_context:
+                # Store temporal context in table metadata for downstream use
+                if not hasattr(table, 'temporal_context'):
+                    # ExtractedTable may not have this field, add to schema_description
+                    fiscal_year = temporal_context.get('fiscal_year')
+                    fiscal_quarter = temporal_context.get('fiscal_quarter')
+                    periods = temporal_context.get('periods_covered', [])
+                    
+                    if fiscal_year or fiscal_quarter or periods:
+                        temporal_info = []
+                        if fiscal_year:
+                            temporal_info.append(f"Fiscal Year: {fiscal_year}")
+                        if fiscal_quarter:
+                            temporal_info.append(f"Quarter: {fiscal_quarter}")
+                        if periods:
+                            temporal_info.append(f"Periods: {', '.join(periods)}")
+                        
+                        table.schema_description = (
+                            table.schema_description + 
+                            " | " + " | ".join(temporal_info)
+                        )
+                        
+                        logger.info(f"Extracted temporal context: {temporal_context}")
+            
             return table
             
+        except json.JSONDecodeError as e:
+            logger.warning(f"LLM returned invalid JSON: {e}")
+            return self._detect_with_heuristics(table)
         except Exception as e:
             # Fall back to heuristics on error
             logger.warning(f"LLM schema detection failed: {e}")

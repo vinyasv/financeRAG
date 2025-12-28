@@ -1,5 +1,6 @@
 """Spreadsheet parsing for Excel and CSV files."""
 
+import logging
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
@@ -7,6 +8,8 @@ import hashlib
 import re
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -58,6 +61,8 @@ class SpreadsheetParser:
         if ext not in self.SUPPORTED_EXTENSIONS:
             raise ValueError(f"Unsupported file type: {ext}. Supported: {self.SUPPORTED_EXTENSIONS}")
         
+        logger.info(f"Parsing spreadsheet: {file_path.name} (type: {ext})")
+        
         if ext == '.csv':
             return self._parse_csv(file_path)
         else:
@@ -85,6 +90,8 @@ class SpreadsheetParser:
             parsed_sheet = self._dataframe_to_sheet(df, sheet_name)
             sheets.append(parsed_sheet)
         
+        logger.info(f"Parsed Excel file with {len(sheets)} sheets")
+        
         return ParsedSpreadsheet(
             filename=file_path.name,
             sheets=sheets,
@@ -105,6 +112,8 @@ class SpreadsheetParser:
         
         # Use filename (without extension) as sheet name
         sheet_name = file_path.stem
+        
+        logger.info(f"Parsed CSV file with {len(df)} rows")
         
         return ParsedSpreadsheet(
             filename=file_path.name,
