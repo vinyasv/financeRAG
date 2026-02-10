@@ -78,15 +78,22 @@ Query → Planner → Execution DAG → Tools (parallel) → Synthesizer → Res
 
 **Query Engine**
 - DAG-based parallel execution for fast, multi-step queries
-- FlashRank cross-encoder reranking (~10-50ms) for precise retrieval
-- Natural language to SQL for structured financial data
+- Three planning modes: LLM-planned, heuristic fallback, fast-path for simple queries
+- FlashRank cross-encoder reranking (~10-50ms, +25% precision)
+- Natural language to SQL with schema clustering for focused context
 - Multi-provider LLM support: OpenRouter, OpenAI, Anthropic
+- Execution monitoring with per-step timing
 
 **Audit & Trust**
 - Calculation transcripts with operand provenance — every number traceable to its source
-- LLM prohibited from arithmetic; all math done via deterministic calculator
-- Structured refusal when data is insufficient
-- Field comparability checking (GAAP vs non-GAAP, etc.)
+- LLM prohibited from arithmetic; all math done via AST-based deterministic calculator
+- Structured refusal with reasons (insufficient data, definition mismatch, period discontinuity, incomparable metrics, missing context)
+- Field comparability checking (GAAP vs non-GAAP, currency, segment scope)
+
+**Security**
+- SQL injection prevention: 18 forbidden keywords, SELECT-only enforcement
+- Prompt injection defense: 16 detection patterns with input sanitization
+- Path traversal protection, API key isolation, AST depth limiting
 
 **Output**
 - PDF, CSV, and JSON export
@@ -137,26 +144,37 @@ cp env.example .env
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OPENROUTER_API_KEY` | — | **Required.** Get one at [openrouter.ai/keys](https://openrouter.ai/keys) |
+| `OPENAI_API_KEY` | — | Optional. Alternative LLM provider |
+| `ANTHROPIC_API_KEY` | — | Optional. Alternative LLM provider |
 | `LLM_MODEL` | `google/gemini-3-flash-preview` | LLM model for planning and synthesis |
-| `EMBEDDING_PROVIDER` | `local` | `local` (free, BAAI/bge-small-en-v1.5) or `openrouter` |
+| `VISION_MODEL` | `google/gemini-2.5-flash-lite` | Vision model for table extraction |
+| `EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model (remote) |
+| `EMBEDDING_PROVIDER` | `auto` | `auto` (prefers OpenRouter if key available), `local` (BAAI/bge-small-en-v1.5), or `openrouter` |
+| `USE_VISION_TABLES` | `true` | Enable VLM-based table extraction |
 
 ## Architecture
 
 ```
 src/
-├── agent/              # Planner, executor, synthesizer
-├── tools/              # SQL, vector search, calculator, reranker
-├── ingestion/          # PDF/CSV parsers, VLM + Docling table extraction
-├── storage/            # SQLite, ChromaDB, schema clustering
+├── agent/              # Planner (3 modes), DAG executor, ExecutionMonitor, synthesizer
+├── tools/              # SQL, vector search, calculator, reranker, comparability checker
+├── ingestion/          # PDF/CSV parsers, VLM + Docling + rule-based table extraction
+│                       # Schema detector, temporal extractor, semantic chunker
+├── storage/            # SQLite, ChromaDB, document store, schema clustering
+│                       # CompanyRegistry, SchemaClusterManager
 ├── rag_agent.py        # Main orchestrator
-├── llm_client.py       # Multi-provider LLM abstraction
+├── models.py           # 60+ Pydantic v2 data models
+├── llm_client.py       # Multi-provider LLM abstraction (12 model aliases)
+├── embeddings.py       # Embedding providers (local + remote)
 ├── security.py         # Input validation, injection prevention
-└── ui/console.py       # Rich terminal UI
+├── config.py           # Configuration management
+└── ui/console.py       # Rich terminal UI with custom theme
 scripts/
 ├── ingest.py           # Document ingestion CLI
-├── query.py            # Query CLI
-└── analyst_evaluation.py
-tests/                  # Unit tests (security, tools, storage, execution)
+├── query.py            # Query CLI (REPL, single-shot, export)
+├── analyst_evaluation.py  # Multi-document evaluation suite
+└── benchmark_vlm.py    # VLM extraction benchmarking
+tests/                  # 9 test suites (security, tools, storage, execution, clustering)
 ```
 
 See [technicaloverview.md](technicaloverview.md) for the full architecture deep-dive.
@@ -165,26 +183,32 @@ See [technicaloverview.md](technicaloverview.md) for the full architecture deep-
 
 | Component | Technology |
 |-----------|-----------|
-| Vector store | [ChromaDB](https://www.trychroma.com/) |
-| Reranking | [FlashRank](https://github.com/PrithivirajDamodaran/FlashRank) |
-| Table extraction | [Docling](https://github.com/DS4SD/docling) (local) + Gemini VLM |
-| Embeddings | [sentence-transformers](https://www.sbert.net/) (BAAI/bge-small-en-v1.5) |
-| Structured storage | SQLite |
-| LLM routing | [OpenRouter](https://openrouter.ai/) |
+| Vector store | [ChromaDB](https://www.trychroma.com/) (HNSW, cosine similarity) |
+| Reranking | [FlashRank](https://github.com/PrithivirajDamodaran/FlashRank) (ms-marco-MiniLM-L-6-v2) |
+| Table extraction | Gemini 2.5 Flash Lite VLM → [Docling](https://github.com/DS4SD/docling) TableFormer (local) → rule-based |
+| Embeddings | [sentence-transformers](https://www.sbert.net/) (BAAI/bge-small-en-v1.5) or OpenRouter (qwen3-embedding-8b) |
+| Structured storage | SQLite with SQL injection prevention |
+| LLM routing | [OpenRouter](https://openrouter.ai/) (12 model aliases across 4 tiers) |
 | PDF parsing | PyMuPDF + pdfplumber |
+| Data models | [Pydantic](https://docs.pydantic.dev/) v2 (60+ models) |
 | Terminal UI | [Rich](https://github.com/Textualize/rich) |
+| PDF export | fpdf2 |
 
 ## Development
 
 ```bash
-# Run tests
+# Run all tests (9 suites)
 pytest tests/
+
+# Run specific suite
+pytest tests/test_sql_security.py
+pytest tests/test_calculator.py
 
 # Lint
 ruff check src/
 ```
 
-Requires Python 3.11+.
+Requires Python 3.11+ (3.12 recommended).
 
 ## License
 
