@@ -193,7 +193,7 @@ class Planner:
                 # Check it's not actually complex (multiple companies mentioned)
                 # Use CompanyRegistry for dynamic company detection
                 registry = CompanyRegistry()
-                known_companies = set(registry.companies.keys())
+                known_companies = set(registry._registry.keys())
                 company_count = sum(1 for c in known_companies if c.lower() in query_lower)
                 if company_count <= 1:
                     return True  # Simple single-entity query

@@ -247,7 +247,16 @@ class DocumentStore:
             except (IOError, OSError, json.JSONDecodeError) as e:
                 logger.warning(f"Skipping corrupted metadata file {metadata_file}: {e}")
         
-        return sorted(documents, key=lambda d: d.ingested_at, reverse=True)
+        # Sort by ingested_at, handling mixed timezone-aware/naive datetimes
+        def sort_key(d):
+            dt = d.ingested_at
+            # If naive datetime, assume UTC
+            if dt.tzinfo is None:
+                from datetime import timezone
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        
+        return sorted(documents, key=sort_key, reverse=True)
     
     # =========================================================================
     # Search Operations

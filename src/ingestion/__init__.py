@@ -6,6 +6,7 @@ from .schema_detector import SchemaDetector
 from .chunker import SemanticChunker
 from .spreadsheet_parser import SpreadsheetParser
 from .vision_table_extractor import VisionTableExtractor
+from .vlm_extractor import VLMTableExtractor
 from .temporal_extractor import extract_temporal_metadata
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "SemanticChunker",
     "SpreadsheetParser",
     "VisionTableExtractor",
+    "VLMTableExtractor",
     "extract_temporal_metadata",
 ]

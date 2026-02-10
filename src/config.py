@@ -54,10 +54,6 @@ class Config:
     use_reranking: bool = True  # Cross-encoder reranking for +25% precision
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     
-    # Vision settings (for table extraction)
-    vision_model: str = "google/gemini-3-flash-preview"  # Vision-capable model for table extraction
-    use_vision_tables: bool = True  # Enable vision-based table extraction
-    
     # Chunking settings
     chunk_size: int = 500
     chunk_overlap: int = 50
@@ -84,8 +80,7 @@ class Config:
         self.llm_model = os.getenv("LLM_MODEL", self.llm_model)
         self.embedding_model = os.getenv("EMBEDDING_MODEL", self.embedding_model)
         self.embedding_provider = os.getenv("EMBEDDING_PROVIDER", self.embedding_provider)
-        self.vision_model = os.getenv("VISION_MODEL", self.vision_model)
-        self.use_vision_tables = os.getenv("USE_VISION_TABLES", "true").lower() == "true"
+
     
     # =========================================================================
     # Secure API Key Access (retrieved at runtime, not stored)

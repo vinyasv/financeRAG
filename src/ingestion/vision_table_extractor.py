@@ -1,8 +1,18 @@
-"""Table extraction using thepipe for fast, accurate PDF parsing."""
+"""Table extraction using Docling for fast, accurate local PDF parsing.
+
+Docling (IBM) uses TableFormer AI model for table recognition,
+providing excellent accuracy on complex financial tables without API costs.
+
+Speed optimizations applied:
+- Default backend (docling-parse) with optimizations
+- OCR disabled for digital PDFs
+- MPS acceleration on Apple Silicon
+- Optimized batch sizes
+"""
 
 import hashlib
 import logging
-import os
+import multiprocessing
 from pathlib import Path
 from typing import Any
 
@@ -15,237 +25,196 @@ logger = logging.getLogger(__name__)
 
 class VisionTableExtractor:
     """
-    Extract tables from PDFs using thepipe.
+    Extract tables from PDFs using Docling (IBM).
     
-    thepipe uses VLMs to extract clean markdown from PDFs,
-    which we then parse into structured data for SQL queries.
+    Docling runs locally using TableFormer model for table structure recognition.
+    No API costs, uses MPS/GPU acceleration on Apple Silicon.
     
-    This is ~5-6x faster than our previous per-table vision approach.
+    Speed optimizations:
+    - Default backend (docling-parse) with optimizations
+    - OCR disabled for digital PDFs (huge speedup)
+    - Optimized batch sizes for MPS
     """
     
     def __init__(self, vision_model: str | None = None):
         """
-        Initialize the table extractor.
+        Initialize the Docling table extractor.
         
         Args:
-            vision_model: Model to use for vision (default from config)
+            vision_model: Unused, kept for API compatibility.
         """
-        self.vision_model = vision_model or config.vision_model
-        self._thepipe = None
-        self._openai = None
+        self._converter = None
     
-    def _ensure_thepipe(self):
-        """Lazy import thepipe."""
-        if self._thepipe is None:
-            from thepipe.scraper import scrape_file
-            self._thepipe = scrape_file
-    
-    def _get_openai_client(self):
-        """Get OpenAI client configured for OpenRouter."""
-        if self._openai is None:
-            from openai import OpenAI
-            
-            api_key = os.getenv("OPENROUTER_API_KEY")
-            if not api_key:
-                return None
-            
-            # Use configurable base URL with fallback to OpenRouter
-            base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-            self._openai = OpenAI(
-                api_key=api_key,
-                base_url=base_url
-            )
-        return self._openai
+    def _ensure_docling(self):
+        """Lazy import and initialize Docling with optimized settings."""
+        if self._converter is None:
+            try:
+                from docling.document_converter import DocumentConverter, PdfFormatOption
+                from docling.datamodel.base_models import InputFormat
+                from docling.datamodel.pipeline_options import (
+                    PdfPipelineOptions,
+                    AcceleratorOptions,
+                    AcceleratorDevice,
+                    TableFormerMode,
+                    TableStructureOptions
+                )
+                
+                # Speed optimizations
+                accelerator_options = AcceleratorOptions(
+                    num_threads=multiprocessing.cpu_count(),
+                    device=AcceleratorDevice.AUTO,  # Uses MPS on Mac, CUDA on Linux
+                )
+                
+                pipeline_options = PdfPipelineOptions(
+                    do_ocr=False,  # Disable OCR for digital PDFs (major speedup)
+                    do_table_structure=True,  # Keep table extraction
+                    table_structure_options=TableStructureOptions(mode=TableFormerMode.FAST),  # Fast mode (4x speedup)
+                    generate_page_images=False,  # Optimize speed
+                    generate_picture_images=False,  # Optimize speed
+                    accelerator_options=accelerator_options,
+                )
+                
+                # New API usage with default backend
+                format_options = {
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+                }
+                
+                self._converter = DocumentConverter(
+                    allowed_formats=[InputFormat.PDF],
+                    format_options=format_options,
+                )
+                
+                logger.info("Docling initialized with speed optimizations (no OCR, default backend)")
+            except ImportError as e:
+                logger.error(f"Docling import failed: {e}. Run: pip install docling")
+                raise ImportError("docling not installed. Run: pip install docling")
+            except Exception as e:
+                # Fallback to simple initialization if advanced options fail
+                logger.warning(f"Advanced Docling config failed ({e}), using defaults")
+                from docling.document_converter import DocumentConverter
+                self._converter = DocumentConverter()
+                logger.info("Docling initialized with default settings")
     
     async def extract_tables_from_pdf(
         self,
         pdf_path: Path,
         document_id: str,
-        max_tables: int = 20,
-        timeout_per_table: float = 60.0  # Not used, kept for compatibility
+        max_tables: int = 100,
+        timeout_per_table: float = 60.0  # Unused, kept for API compatibility
     ) -> list[ExtractedTable]:
         """
-        Extract all tables from a PDF using thepipe.
+        Extract all tables from a PDF using Docling.
         
         Args:
             pdf_path: Path to the PDF file
             document_id: ID of the parent document
             max_tables: Maximum number of tables to extract
-            timeout_per_table: Not used (kept for API compatibility)
+            timeout_per_table: Unused (kept for API compatibility)
             
         Returns:
             List of ExtractedTable objects
         """
-        self._ensure_thepipe()
+        self._ensure_docling()
         
-        client = self._get_openai_client()
+        logger.info(f"Extracting tables with Docling from: {pdf_path.name}")
         
-        logger.info(f"Extracting tables with thepipe (model: {self.vision_model})")
-        
-        # Use thepipe to scrape the PDF
-        if client and config.use_vision_tables:
-            chunks = self._thepipe(
-                filepath=str(pdf_path),
-                openai_client=client,
-                model=self.vision_model
-            )
-        else:
-            # Without VLM, just extract text
-            chunks = self._thepipe(filepath=str(pdf_path))
-        
-        logger.debug(f"Extracted {len(chunks)} chunks from PDF")
-        
-        # Parse markdown tables from chunks
-        tables = []
-        table_index = 0
-        
-        for chunk_idx, chunk in enumerate(chunks):
-            if not chunk.text:
-                continue
+        try:
+            # Convert the document
+            result = self._converter.convert(str(pdf_path))
+            doc = result.document
             
-            # Find markdown tables in the chunk
-            chunk_tables = self._extract_markdown_tables(chunk.text)
+            tables = []
+            table_index = 0
             
-            for table_data in chunk_tables:
+            # Iterate through document tables
+            for table_item in doc.tables:
                 if table_index >= max_tables:
                     break
                 
-                # Convert to ExtractedTable
-                table = self._create_extracted_table(
-                    table_data=table_data,
-                    document_id=document_id,
-                    page_number=chunk_idx + 1,  # Approximate page number
-                    table_index=table_index
-                )
-                
-                if table and len(table.rows) > 0:
-                    tables.append(table)
-                    logger.debug(f"Table {table_index + 1}: {len(table.rows)} rows, {len(table.columns)} columns")
-                    table_index += 1
-        
-        if not tables:
-            logger.debug("No tables found in document")
-        
-        return tables
-    
-    def _extract_markdown_tables(self, text: str) -> list[dict]:
-        """
-        Extract markdown tables from text.
-        
-        Returns list of dicts with 'headers' and 'rows' keys.
-        """
-        tables = []
-        lines = text.split('\n')
-        
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            
-            # Look for table header (line with |)
-            if '|' in line and not line.startswith('|---'):
-                # Check if next line is separator (|---|---|)
-                if i + 1 < len(lines) and re.match(r'^[\s|:-]+$', lines[i + 1]):
-                    table = self._parse_markdown_table(lines, i)
-                    if table and table.get('headers') and table.get('rows'):
+                try:
+                    # Export to DataFrame with document context
+                    df = table_item.export_to_dataframe(doc=doc)
+                    
+                    if df is None or df.empty:
+                        continue
+                    
+                    # Convert DataFrame to ExtractedTable
+                    table = self._dataframe_to_extracted_table(
+                        df=df,
+                        document_id=document_id,
+                        table_index=table_index,
+                        table_item=table_item
+                    )
+                    
+                    if table and len(table.rows) > 0:
                         tables.append(table)
-                    # Skip past the table
-                    i += len(table.get('rows', [])) + 2  # header + separator + rows
+                        logger.debug(
+                            f"Table {table_index + 1}: {len(table.rows)} rows, "
+                            f"{len(table.columns)} columns"
+                        )
+                        table_index += 1
+                        
+                except Exception as e:
+                    logger.warning(f"Error extracting table {table_index}: {e}")
                     continue
             
-            i += 1
-        
-        return tables
+            logger.info(f"Extracted {len(tables)} tables from {pdf_path.name}")
+            return tables
+            
+        except Exception as e:
+            logger.error(f"Docling extraction failed: {e}")
+            raise
     
-    def _parse_markdown_table(self, lines: list[str], start_idx: int) -> dict:
-        """Parse a markdown table starting at the given index."""
-        # Parse header
-        header_line = lines[start_idx].strip()
-        headers = self._parse_table_row(header_line)
-        
-        if not headers:
-            return {}
-        
-        # Skip separator line
-        rows = []
-        i = start_idx + 2  # Skip header and separator
-        
-        while i < len(lines):
-            line = lines[i].strip()
-            
-            # End of table
-            if not line or '|' not in line:
-                break
-            
-            # Skip separator lines
-            if re.match(r'^[\s|:-]+$', line):
-                i += 1
-                continue
-            
-            row_values = self._parse_table_row(line)
-            
-            if row_values and len(row_values) > 0:
-                # Create row dict
-                row = {}
-                for j, header in enumerate(headers):
-                    if j < len(row_values):
-                        row[header] = row_values[j]
-                    else:
-                        row[header] = None
-                rows.append(row)
-            
-            i += 1
-        
-        return {
-            'headers': headers,
-            'rows': rows
-        }
-    
-    def _parse_table_row(self, line: str) -> list[str]:
-        """Parse a single table row, extracting cell values."""
-        # Remove leading/trailing |
-        line = line.strip()
-        if line.startswith('|'):
-            line = line[1:]
-        if line.endswith('|'):
-            line = line[:-1]
-        
-        # Split by |
-        cells = [cell.strip() for cell in line.split('|')]
-        
-        return cells
-    
-    def _create_extracted_table(
+    def _dataframe_to_extracted_table(
         self,
-        table_data: dict,
+        df,
         document_id: str,
-        page_number: int,
-        table_index: int
+        table_index: int,
+        table_item: Any = None
     ) -> ExtractedTable | None:
-        """Convert parsed table data to ExtractedTable model."""
-        headers = table_data.get('headers', [])
-        rows_data = table_data.get('rows', [])
-        
-        if not headers or not rows_data:
+        """Convert a pandas DataFrame to ExtractedTable model."""
+        if df is None or df.empty:
             return None
+        
+        # Get page number if available
+        page_number = 1
+        if table_item and hasattr(table_item, 'prov') and table_item.prov:
+            for prov in table_item.prov:
+                if hasattr(prov, 'page_no'):
+                    page_number = prov.page_no
+                    break
         
         # Normalize column names
-        columns = [self._normalize_column_name(h) for h in headers]
+        original_columns = list(df.columns)
+        columns = [normalize_column_name(str(c), max_length=50) for c in original_columns]
+        
+        # Handle duplicate column names
+        seen = {}
+        unique_columns = []
+        for col in columns:
+            if col in seen:
+                seen[col] += 1
+                unique_columns.append(f"{col}_{seen[col]}")
+            else:
+                seen[col] = 0
+                unique_columns.append(col)
+        columns = unique_columns
         
         # Filter out empty columns
-        valid_indices = [i for i, col in enumerate(columns) if col]
-        if not valid_indices:
+        valid_mask = [bool(col) for col in columns]
+        if not any(valid_mask):
             return None
         
-        columns = [columns[i] for i in valid_indices]
-        original_headers = [headers[i] for i in valid_indices]
+        columns = [c for c, v in zip(columns, valid_mask) if v]
+        original_columns = [c for c, v in zip(original_columns, valid_mask) if v]
         
         # Process rows
         rows = []
-        for row_data in rows_data:
+        for _, row in df.iterrows():
             processed_row = {}
-            for orig_header, col_name in zip(original_headers, columns):
-                value = row_data.get(orig_header)
-                processed_row[col_name] = self._process_value(value)
+            for orig_col, norm_col in zip(original_columns, columns):
+                value = row.get(orig_col)
+                processed_row[norm_col] = self._process_value(value)
             
             # Only add row if it has at least one non-null value
             if any(v is not None for v in processed_row.values()):
@@ -254,15 +223,16 @@ class VisionTableExtractor:
         if not rows:
             return None
         
-        # Generate table ID and name
+        # Generate table ID
         table_id = hashlib.sha256(
             f"{document_id}:{page_number}:{table_index}:{':'.join(columns[:5])}".encode()
         ).hexdigest()[:16]
         
+        # Generate table name
         table_name = f"table_p{page_number}_{self._generate_table_name(columns)}"
         
         # Build raw text representation
-        raw_text = self._build_raw_text(columns, rows)
+        raw_text = table_to_text(columns, rows, max_rows=20)
         
         # Generate description
         description = self._generate_description(columns, rows)
@@ -278,14 +248,18 @@ class VisionTableExtractor:
             raw_text=raw_text
         )
     
-    def _normalize_column_name(self, name: str) -> str:
-        """Normalize a column name to a valid identifier."""
-        return normalize_column_name(name, max_length=50)
-    
     def _process_value(self, value: Any) -> Any:
         """Process a cell value, parsing numbers where appropriate."""
         if value is None:
             return None
+        
+        # Handle pandas NA
+        try:
+            import pandas as pd
+            if pd.isna(value):
+                return None
+        except (ImportError, TypeError):
+            pass
         
         if isinstance(value, (int, float)):
             return value
@@ -295,19 +269,15 @@ class VisionTableExtractor:
         
         value = value.strip()
         
-        if not value or value.lower() == 'none':
+        if not value or value.lower() in ('none', 'nan', ''):
             return None
         
         # Try to parse as number
-        numeric = self._parse_numeric(value)
+        numeric = parse_numeric(value)
         if numeric is not None:
             return numeric
         
         return value
-    
-    def _parse_numeric(self, value: str) -> float | None:
-        """Try to parse a string as a number."""
-        return parse_numeric(value)
     
     def _generate_table_name(self, columns: list[str]) -> str:
         """Generate a descriptive table name from columns."""
@@ -332,7 +302,3 @@ class VisionTableExtractor:
             table_type = "Data table"
         
         return f"{table_type} with {row_count} rows. Columns: {col_names}"
-    
-    def _build_raw_text(self, columns: list[str], rows: list[dict]) -> str:
-        """Build a text representation of the table."""
-        return table_to_text(columns, rows, max_rows=20)

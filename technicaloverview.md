@@ -28,7 +28,8 @@ flowchart TB
     
     subgraph Ingestion["🔄 Ingestion Pipeline"]
         Parser[Document Parser]
-        TableExt[Table Extractor]
+        VLM[VLM Extractor (Gemini)]
+        Docling[Docling (Fallback)]
         Chunker[Text Chunker]
         Embedder[Embedding Generator]
     end
@@ -60,9 +61,12 @@ flowchart TB
     
     PDF --> Parser
     XLSX --> Parser
-    Parser --> TableExt
+    Parser --> VLM
+    VLM -.->|Fallback| Docling
+    VLM --> SQLite
+    Docling --> SQLite
     Parser --> Chunker
-    TableExt --> SQLite
+
     Chunker --> Embedder
     Embedder --> ChromaDB
     Parser --> DocStore
@@ -116,7 +120,12 @@ Decomposes natural language queries into executable tool call DAGs.
 
 ```python
 class Planner:
-    async def plan(query: str) -> ExecutionPlan
+    async def create_plan(
+        query: str,
+        available_tables: list[str] | None = None,
+        available_documents: list[str] | None = None,
+        skip_llm: bool = False
+    ) -> ExecutionPlan
 ```
 
 **Output Structure:**
@@ -140,7 +149,6 @@ class Planner:
 | `vector_search` | Semantic document search | Search query | Relevant chunks |
 | `calculator` | Safe math with audit transcripts | Expression | `CalculationTranscript` |
 | `get_document` | Retrieve full documents | Document ID | Document content |
-| `comparability` | Check field comparability | Two field definitions | `ComparabilityResult` |
 
 **Tool Interface:**
 ```python
@@ -503,7 +511,6 @@ class Config:
     
     # Models
     llm_model: str = "google/gemini-3-flash-preview"
-    vision_model: str = "google/gemini-3-flash-preview"
     
     # Security (properties, not stored)
     @property
@@ -518,7 +525,7 @@ class Config:
 
 | Operation | Typical Time | Notes |
 |-----------|--------------|-------|
-| PDF Ingestion | 30-60s | Depends on page count, tables |
+| PDF Ingestion | 15-45s | VLM extraction (~0.3s/page) |
 | Spreadsheet Ingestion | 5-15s | Per sheet |
 | Simple Query | 3-5s | Single vector search |
 | Complex Query | 5-10s | Multiple tools, parallel execution |
@@ -564,27 +571,40 @@ ultimateRAG/
 │   │   ├── sql_query.py       # SQL tool
 │   │   ├── vector_search.py   # Search tool
 │   │   ├── calculator.py      # Math tool with transcripts
-│   │   ├── comparability.py   # Field comparability checking
+│   │   ├── comparability.py   # Field comparability utilities
+│   │   ├── reranker.py        # Cross-encoder reranking
 │   │   └── get_document.py    # Document tool
 │   ├── storage/
 │   │   ├── sqlite_store.py    # Structured storage
 │   │   ├── chroma_store.py    # Vector storage
-│   │   └── document_store.py  # File storage
-│   └── ingestion/
-│       ├── pdf_parser.py      # PDF parsing
-│       ├── spreadsheet_parser.py
-│       ├── table_extractor.py
-│       ├── vision_table_extractor.py
-│       ├── chunker.py         # Text chunking
-│       └── schema_detector.py
+│   │   ├── document_store.py  # File storage
+│   │   └── schema_cluster.py  # Company-based schema clustering
+│   ├── ingestion/
+│   │   ├── pdf_parser.py      # PDF parsing
+│   │   ├── spreadsheet_parser.py
+│   │   ├── table_extractor.py # Rule-based fallback
+│   │   ├── vision_table_extractor.py  # Docling (local)
+│   │   ├── vlm_extractor.py   # VLM cloud extraction
+│   │   ├── chunker.py         # Text chunking
+│   │   ├── schema_detector.py
+│   │   ├── temporal_extractor.py  # Fiscal period extraction
+│   │   └── utils.py           # Ingestion utilities
+│   └── ui/
+│       ├── __init__.py
+│       └── console.py         # Rich-based terminal UI
 ├── scripts/
 │   ├── query.py               # Query CLI
-│   └── ingest.py              # Ingestion CLI
+│   ├── ingest.py              # Ingestion CLI
+│   └── analyst_evaluation.py  # Query evaluation suite
 ├── tests/
 │   ├── test_calculator.py     # Calculator + transcript tests
 │   ├── test_executor.py       # DAG execution tests
 │   ├── test_sql_security.py
-│   └── test_prompt_injection.py
+│   ├── test_prompt_injection.py
+│   ├── test_schema_clustering.py
+│   ├── test_scripts_fixes.py
+│   ├── test_storage_fixes.py
+│   └── test_tools_fixes.py
 ├── data/                      # Generated data directory
 │   ├── documents/
 │   └── db/
@@ -611,8 +631,9 @@ ultimateRAG/
 
 ### Performance
 - `flashrank` - Fast reranking
-- `thepipe` - Vision-based extraction
+- `PyMuPDF` - High-speed PDF rendering for VLM
+- `docling` - Fallback table extraction (local)
 
 ---
 
-*Document Version: 1.1 | Last Updated: December 24, 2024*
+*Document Version: 1.3 | Last Updated: January 5, 2026*

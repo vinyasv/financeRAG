@@ -18,9 +18,20 @@ from src.config import config
 from src.rag_agent import RAGAgent
 from src.llm_client import get_llm_client, OpenRouterClient
 from src.security import MAX_QUERY_LENGTH, detect_injection_attempt
+from src.ui import (
+    console,
+    print_header,
+    print_answer,
+    print_citations,
+    print_stats_table,
+    print_models_table,
+    print_error,
+    print_warning,
+    create_status,
+)
 
 # Configure logging - write to data directory, not CWD
-log_dir = config.data_path / "logs"
+log_dir = config.data_dir / "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
@@ -28,7 +39,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(log_dir / 'query.log'),
-        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
@@ -142,10 +152,10 @@ def export_to_csv(output_path: Path, results: list[dict]) -> bool:
             writer = csv.DictWriter(f, fieldnames=["query", "answer", "citations", "response_time_ms", "timestamp"])
             writer.writeheader()
             writer.writerows(results)
-        print(f"\n📁 Results exported to: {output_path}")
+        console.print(f"\n[info]Results exported to:[/info] {output_path}")
         return True
     except (IOError, OSError) as e:
-        print(f"\n❌ Failed to export CSV: {e}")
+        print_error(f"Failed to export CSV: {e}")
         return False
 
 
@@ -154,10 +164,10 @@ def export_to_json(output_path: Path, results: list[dict]) -> bool:
     try:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
-        print(f"\n📁 Results exported to: {output_path}")
+        console.print(f"\n[info]Results exported to:[/info] {output_path}")
         return True
     except (IOError, OSError) as e:
-        print(f"\n❌ Failed to export JSON: {e}")
+        print_error(f"Failed to export JSON: {e}")
         return False
 
 
@@ -166,7 +176,7 @@ def export_to_pdf(output_path: Path, results: list[dict]) -> bool:
     try:
         from fpdf import FPDF
     except ImportError:
-        print("❌ PDF export requires fpdf2: pip install fpdf2")
+        print_error("PDF export requires fpdf2: pip install fpdf2")
         return False
     
     pdf = FPDF()
@@ -221,26 +231,32 @@ def export_to_pdf(output_path: Path, results: list[dict]) -> bool:
     
     try:
         pdf.output(str(output_path))
-        print(f"\n📄 PDF report exported to: {output_path}")
+        console.print(f"\n[info]PDF report exported to:[/info] {output_path}")
         return True
     except (IOError, OSError) as e:
-        print(f"\n❌ Failed to export PDF: {e}")
+        print_error(f"Failed to export PDF: {e}")
         return False
 
 
-async def interactive_mode(agent: RAGAgent, model_name: str | None):
+async def interactive_mode(agent: RAGAgent, model_name: str | None, provider: str | None):
     """Run in interactive mode."""
-    print("Finance RAG Interactive Query Mode")
-    if model_name:
-        print(f"Model: {model_name}")
-    print("Commands: 'quit', 'stats', 'models'")
-    print("-" * 50)
+    stats = agent.get_stats()
+    print_header(
+        doc_count=stats['document_count'],
+        table_count=stats['table_count'],
+        chunk_count=stats['chunk_count'],
+        model=model_name,
+        provider=provider
+    )
+    
+    console.print("[muted]Commands: quit, stats, models[/muted]")
+    console.print()
     
     while True:
         try:
-            query = input("\nQuery: ").strip()
+            query = console.input("[accent]>[/accent] ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nGoodbye!")
+            console.print("\n[muted]Goodbye.[/muted]")
             break
         
         if not query:
@@ -249,40 +265,35 @@ async def interactive_mode(agent: RAGAgent, model_name: str | None):
         # Validate query
         is_valid, error_msg = validate_query_input(query)
         if not is_valid:
-            print(f"⚠️ {error_msg}")
+            print_warning(error_msg)
             continue
         
         if query.lower() in ('quit', 'exit', 'q'):
-            print("Goodbye!")
+            console.print("[muted]Goodbye.[/muted]")
             break
         
         if query.lower() == 'stats':
             stats = agent.get_stats()
-            print(f"\nDocuments: {stats['document_count']}")
-            print(f"Tables: {stats['table_count']}")
-            print(f"Chunks: {stats['chunk_count']}")
-            for doc in stats['documents']:
-                print(f"  - {doc['filename']} ({doc['pages']} pages)")
+            print_stats_table(stats)
             continue
         
         if query.lower() == 'models':
-            print("\nAvailable OpenRouter models:")
-            for short, full in OpenRouterClient.list_models().items():
-                print(f"  {short:15} -> {full}")
+            models = OpenRouterClient.list_models()
+            print_models_table(models)
             continue
         
         try:
-            response = await agent.query(query, verbose=True)
-            print("\n" + "=" * 50)
-            print("ANSWER:")
-            print(response.answer)
+            with create_status("Planning query..."):
+                response = await agent.query(query, verbose=True)
+            
+            console.print()
+            print_answer(response.answer, response.total_time_ms)
             
             if response.citations:
-                print("\nCitations:")
-                for cite in response.citations[:3]:
-                    print(f"  - {cite.format_reference()}")
+                print_citations(response.citations)
+                
         except Exception as e:
-            print(f"Error: {e}")
+            print_error(str(e))
 
 
 async def single_query(agent: RAGAgent, query: str, verbose: bool = False, output_path: Path | None = None):
@@ -290,22 +301,19 @@ async def single_query(agent: RAGAgent, query: str, verbose: bool = False, outpu
     # Validate query
     is_valid, error_msg = validate_query_input(query)
     if not is_valid:
-        print(f"⚠️ {error_msg}")
+        print_warning(error_msg)
         return
     
     logger.info(f"Processing query of length {len(query)} chars")
     
-    response = await agent.query(query, verbose=verbose)
+    with create_status("Processing query..."):
+        response = await agent.query(query, verbose=verbose)
     
-    print("\nAnswer:")
-    print(response.answer)
+    console.print()
+    print_answer(response.answer, response.total_time_ms)
     
     if response.citations:
-        print("\nCitations:")
-        for cite in response.citations[:5]:
-            print(f"  - {cite.format_reference()}")
-    
-    print(f"\nExecution time: {response.total_time_ms:.1f}ms")
+        print_citations(response.citations)
     
     # Export if output path specified
     if output_path:
@@ -333,33 +341,30 @@ async def main():
     
     # Handle --list-models
     if args.list_models:
-        print("Available OpenRouter model shortcuts:")
-        print()
-        print("Fast & Cheap:")
-        for name in ["gemini-flash", "gpt-4o-mini", "claude-haiku", "llama-8b"]:
-            print(f"  {name:15} -> {OpenRouterClient.list_models()[name]}")
-        print()
-        print("Balanced:")
-        for name in ["gpt-4o", "claude-sonnet", "gemini-pro", "llama-70b"]:
-            print(f"  {name:15} -> {OpenRouterClient.list_models()[name]}")
-        print()
-        print("Best Quality:")
-        for name in ["claude-opus", "gpt-4-turbo", "llama-405b"]:
-            print(f"  {name:15} -> {OpenRouterClient.list_models()[name]}")
-        print()
-        print("Free (rate limited):")
-        print(f"  {'free':15} -> {OpenRouterClient.list_models()['free']}")
+        console.print("\n[accent]Available OpenRouter Models[/accent]")
+        
+        models = OpenRouterClient.list_models()
+        categories = [
+            ("Fast & Cheap", ["gemini-flash", "gpt-4o-mini", "claude-haiku", "llama-8b"]),
+            ("Balanced", ["gpt-4o", "claude-sonnet", "gemini-pro", "llama-70b"]),
+            ("Best Quality", ["claude-opus", "gpt-4-turbo", "llama-405b"]),
+            ("Free (rate limited)", ["free"]),
+        ]
+        
+        print_models_table(models, categories)
         return
     
     # Get LLM client
     llm_client = get_llm_client(provider=args.provider, model=args.model)
     
+    provider_name = args.provider if args.provider != "auto" else None
     if llm_client:
-        model_info = args.model or "auto"
-        print(f"Using LLM: {args.provider} ({model_info})")
-    else:
-        print("No LLM configured - using heuristic mode")
-        print("Set OPENROUTER_API_KEY for full functionality")
+        if hasattr(llm_client, 'provider'):
+            provider_name = llm_client.provider
+    
+    if not llm_client:
+        print_warning("No LLM configured - using heuristic mode")
+        console.print("[muted]Set OPENROUTER_API_KEY for full functionality[/muted]")
     
     # Initialize agent
     agent = RAGAgent(llm_client=llm_client)
@@ -367,19 +372,16 @@ async def main():
     # Check if we have any documents
     stats = agent.get_stats()
     if stats['document_count'] == 0:
-        print("\nNo documents ingested yet!")
-        print("Run: python scripts/ingest.py <pdf_path>")
+        print_warning("No documents ingested yet")
+        console.print("[muted]Run: python scripts/ingest.py <pdf_path>[/muted]")
         return
-    
-    print(f"Knowledge base: {stats['document_count']} docs, {stats['table_count']} tables, {stats['chunk_count']} chunks")
-    print()
     
     # Run query or interactive mode
     if args.query:
         query = " ".join(args.query)
         await single_query(agent, query, args.verbose, args.output)
     else:
-        await interactive_mode(agent, args.model)
+        await interactive_mode(agent, args.model, provider_name)
 
 
 if __name__ == "__main__":

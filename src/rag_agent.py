@@ -21,6 +21,7 @@ from .storage.schema_cluster import SchemaClusterManager
 from .ingestion.pdf_parser import PDFParser
 from .ingestion.table_extractor import TableExtractor
 from .ingestion.vision_table_extractor import VisionTableExtractor
+from .ingestion.vlm_extractor import VLMTableExtractor
 from .ingestion.chunker import SemanticChunker
 from .ingestion.schema_detector import SchemaDetector
 from .ingestion.spreadsheet_parser import SpreadsheetParser
@@ -90,13 +91,12 @@ class RAGAgent:
         # Ingestion components
         self.pdf_parser = PDFParser()
         self.spreadsheet_parser = SpreadsheetParser()
-        self.table_extractor = TableExtractor()
-        self.vision_table_extractor = VisionTableExtractor(llm_client=llm_client)
+        self.table_extractor = TableExtractor()  # Rule-based fallback
+
+        self.docling_extractor = VisionTableExtractor()  # Secondary - Local Docling
+        self.vlm_extractor = VLMTableExtractor() # Primary - Cloud VLM
         self.chunker = SemanticChunker()
         self.schema_detector = SchemaDetector(llm_client=llm_client)
-        
-        # Vision table extraction enabled?
-        self.use_vision_tables = config.use_vision_tables and llm_client is not None
     
     async def ingest_document(self, file_path: Path) -> Document | list[Document]:
         """
@@ -176,47 +176,78 @@ class RAGAgent:
         )
         
         # Learn company from document filename using LLM
-        await self.schema_cluster_manager.learn_company_from_document(pdf_path.name)
+        try:
+            await self.schema_cluster_manager.learn_company_from_document(pdf_path.name)
+        except Exception as e:
+            logger.warning(f"Company learning failed for {pdf_path.name}: {e}")
         
-        # Extract and save tables
+        # Extract and save tables using VLM (fastest) -> Docling (local fast) -> Rule-based (fallback)
         tables = []
         
-        if self.use_vision_tables:
-            logger.info("Using vision LLM for table extraction")
+        # 1. Try VLM Extractor (Sub-5s speed)
+        if config.openrouter_api_key:
             try:
-                tables = await self.vision_table_extractor.extract_tables_from_pdf(
+                logger.info("Using VLM Table Extractor (Cloud)")
+                tables = await self.vlm_extractor.extract_tables_from_pdf(
                     pdf_path, doc_id
                 )
             except Exception as e:
-                logger.warning(f"Vision extraction failed: {e}, falling back to rule-based")
+                logger.warning(f"VLM extraction failed: {e}, falling back to Docling")
+        
+        # 2. Try Docling (Fast Mode) if VLM skipped or failed
+        if not tables:
+            try:
+                logger.info("Using Docling for table extraction (Local Fast Mode)")
+                tables = await self.docling_extractor.extract_tables_from_pdf(
+                    pdf_path, doc_id
+                )
+            except Exception as e:
+                logger.warning(f"Docling extraction failed: {e}, falling back to rule-based")
                 tables = []
         
+        # 3. Fall back to rule-based extraction
         if not tables:
-            # Fall back to rule-based extraction
             tables = self.table_extractor.extract_tables(parsed, doc_id)
         
-        for table in tables:
-            # Always enhance schema with LLM for better column/table names
-            if self.llm_client:
-                logger.debug(f"Enhancing schema for table: {(table.table_name or '')[:40]}")
-                table = await self.schema_detector.detect_schema(table)
-                logger.debug(f"Renamed to: {table.table_name}")
-            self.sqlite_store.save_table(table)
-            
-            # Assign table to cluster for scalable context (LLM classification)
-            await self.schema_cluster_manager.assign_table(
-                table_name=table.table_name,
-                columns=table.columns,
-                schema_description=table.schema_description,
-                source_document=pdf_path.name
-            )
+        # Process tables concurrently to speed up schema detection and clustering
+        # Sequential processing of ~200 tables takes ~10 mins; concurrency reduces this to <1 min
+        logger.info(f"Processing {len(tables)} tables concurrently...")
+        
+        # Semaphore to limit concurrent LLM calls (prevent rate limits)
+        sem = asyncio.Semaphore(10)
+        
+        async def process_table(table):
+            async with sem:
+                # Always enhance schema with LLM for better column/table names
+                if self.llm_client:
+                    try:
+                        logger.debug(f"Enhancing schema for table: {(table.table_name or '')[:40]}")
+                        table = await self.schema_detector.detect_schema(table)
+                        logger.debug(f"Renamed to: {table.table_name}")
+                    except Exception as e:
+                        logger.warning(f"Schema enhancement failed for {table.id}, using original: {e}")
+                
+                self.sqlite_store.save_table(table)
+                
+                # Assign table to cluster for scalable context (LLM classification)
+                try:
+                    await self.schema_cluster_manager.assign_table(
+                        table_name=table.table_name,
+                        columns=table.columns,
+                        schema_description=table.schema_description,
+                        source_document=pdf_path.name
+                    )
+                except Exception as e:
+                    logger.warning(f"Table clustering failed for {table.table_name}, skipping assignment: {e}")
+
+        # Run all table processing tasks
+        await asyncio.gather(*[process_table(t) for t in tables])
         
         # Chunk text and store in vector DB
         chunks = self.chunker.chunk_document(parsed, doc_id)
         self.chroma_store.add_chunks(chunks)
         
-        extraction_method = "vision" if self.use_vision_tables and tables else "rule-based"
-        logger.info(f"Ingested PDF: {pdf_path.name} - {parsed.page_count} pages, {len(tables)} tables ({extraction_method}), {len(chunks)} chunks")
+        logger.info(f"Ingested PDF: {pdf_path.name} - {parsed.page_count} pages, {len(tables)} tables (Docling), {len(chunks)} chunks")
         
         return doc
     

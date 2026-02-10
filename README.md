@@ -35,7 +35,8 @@ python scripts/query.py "What was 2024 revenue growth?"
 | Feature | Description |
 |---------|-------------|
 | **Parallel Execution** | DAG-based tool execution for maximum speed |
-| **Smart Table Extraction** | Vision-based (VLM) or rule-based PDF table parsing |
+| **VLM Table Extraction** | High-precision table extraction using Gemini 2.5 Flash Lite (Vision) |
+| **Robust Fallback** | Automatic fallback to Docling (local model) if API is unavailable |
 | **CSV/Spreadsheet Support** | Native ingestion of CSV and multi-sheet Excel files |
 | **Temporal Queries** | Fiscal year/quarter metadata extraction for time-based analysis |
 | **Schema Clustering** | Automatic grouping of tables by company and document |
@@ -109,7 +110,6 @@ OPENROUTER_API_KEY=your-key-here   # Required (get at openrouter.ai/keys)
 
 # Optional
 LLM_MODEL=gpt-4o-mini              # Default model
-USE_VISION_TABLES=true             # Enable vision table extraction
 EMBEDDING_PROVIDER=local           # Use local embeddings (free)
 ```
 
@@ -162,4 +162,4 @@ MIT
 
 ## Acknowledgements
 
-[ChromaDB](https://www.trychroma.com/) · [FlashRank](https://github.com/PrithivirajDamodaran/FlashRank) · [thepipe](https://github.com/emcf/thepipe) · [OpenRouter](https://openrouter.ai/)
+[ChromaDB](https://www.trychroma.com/) · [FlashRank](https://github.com/PrithivirajDamodaran/FlashRank) · [Docling](https://github.com/DS4SD/docling) · [OpenRouter](https://openrouter.ai/)

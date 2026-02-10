@@ -149,8 +149,8 @@ class OpenRouterClient(LLMClient):
         """
         self._ensure_client()
         
-        # Use specified model or default vision model from config
-        vision_model = model or _config.vision_model
+        # Use specified model or default LLM model from config
+        vision_model = model or _config.llm_model
         
         # Build extra headers for OpenRouter
         extra_headers = {}

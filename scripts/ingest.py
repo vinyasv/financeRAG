@@ -15,9 +15,18 @@ from src.config import config
 from src.rag_agent import RAGAgent
 from src.llm_client import get_llm_client
 from src.security import validate_file_size, validate_path_safety
+from src.ui import (
+    console,
+    print_ingestion_summary,
+    print_error,
+    print_warning,
+    print_success,
+    print_info,
+    create_progress,
+)
 
 # Configure logging - write to data directory, not CWD
-log_dir = config.data_path / "logs"
+log_dir = config.data_dir / "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
@@ -25,7 +34,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(log_dir / 'ingest.log'),
-        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
@@ -33,16 +41,6 @@ logger = logging.getLogger(__name__)
 # Silence noisy loggers  
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('chromadb').setLevel(logging.WARNING)
-
-# Try to import tqdm for progress bar
-try:
-    from tqdm import tqdm
-    HAS_TQDM = True
-except ImportError:
-    HAS_TQDM = False
-    def tqdm(iterable, **kwargs):
-        """Fallback for tqdm if not installed."""
-        return iterable
 
 # Supported file extensions
 SUPPORTED_EXTENSIONS = {'.pdf', '.xlsx', '.xls', '.csv'}
@@ -133,11 +131,11 @@ def discover_files(folder: Path, pattern: str = "*") -> list[Path]:
         List of file paths
     """
     if not folder.exists():
-        print(f"❌ Folder not found: {folder}")
+        print_error(f"Folder not found: {folder}")
         return []
     
     if not folder.is_dir():
-        print(f"❌ Not a directory: {folder}")
+        print_error(f"Not a directory: {folder}")
         return []
     
     files = []
@@ -168,7 +166,7 @@ async def main():
     if args.folder:
         discovered = discover_files(args.folder, args.pattern)
         files_to_process.extend(discovered)
-        print(f"📁 Discovered {len(discovered)} files in {args.folder}")
+        print_info(f"Discovered {len(discovered)} files in {args.folder}")
     
     # From explicit file arguments
     for file_path in args.files:
@@ -176,26 +174,27 @@ async def main():
         if path.exists():
             files_to_process.append(path)
         else:
-            print(f"⚠️  File not found: {path}")
+            print_warning(f"File not found: {path}")
     
     if not files_to_process:
-        print("No files to ingest!")
-        print("\nUsage:")
-        print("  python ingest.py <file_path> [file_path2] ...")
-        print("  python ingest.py -f <folder_path>")
-        print("\nSupported file types:")
-        print("  - PDF documents (.pdf)")
-        print("  - Excel workbooks (.xlsx, .xls)")
-        print("  - CSV files (.csv)")
+        print_error("No files to ingest")
+        console.print()
+        console.print("[muted]Usage:[/muted]")
+        console.print("  python ingest.py <file_path> [file_path2] ...")
+        console.print("  python ingest.py -f <folder_path>")
+        console.print()
+        console.print("[muted]Supported file types:[/muted]")
+        console.print("  - PDF documents (.pdf)")
+        console.print("  - Excel workbooks (.xlsx, .xls)")
+        console.print("  - CSV files (.csv)")
         sys.exit(1)
     
-    # Initialize LLM client for vision table extraction
+    # Initialize LLM client
     llm_client = get_llm_client()
-    if llm_client and config.use_vision_tables:
-        print(f"Vision table extraction: enabled (model: {config.vision_model})")
-    else:
-        print("Vision table extraction: disabled (no LLM client or USE_VISION_TABLES=false)")
-    print()
+    
+    # Docling table extraction status
+    print_info("Table extraction: Docling (local, free)")
+    console.print()
     
     # Initialize agent with LLM
     agent = RAGAgent(llm_client=llm_client)
@@ -206,90 +205,89 @@ async def main():
     failed_files = []
     
     # Create progress bar
-    show_progress = HAS_TQDM and not args.no_progress and len(files_to_process) > 1
+    show_progress = not args.no_progress and len(files_to_process) > 1
     
-    # Process each file
-    iterator = tqdm(
-        files_to_process,
-        desc="Ingesting",
-        unit="file",
-        disable=not show_progress
-    )
-    
-    for path in iterator:
-        ext = path.suffix.lower()
-        if ext not in SUPPORTED_EXTENSIONS:
-            skipped_files.append((path.name, f"unsupported type {ext}"))
-            continue
-        
-        # Validate file before ingestion (SEC-006)
-        is_valid, error = validate_file_for_ingestion(path)
-        if not is_valid:
-            skipped_files.append((path.name, error))
-            logger.warning(f"Skipping invalid file: {error}")
-            continue
-        
-        # Update progress bar description
-        if show_progress:
-            iterator.set_postfix_str(path.name[:30])
-        
-        logger.info(f"Ingesting file: {path.name} ({path.stat().st_size / 1024 / 1024:.1f}MB)")
-        
-        try:
-            result = await agent.ingest_document(path)
+    if show_progress:
+        with create_progress() as progress:
+            task = progress.add_task("Ingesting files...", total=len(files_to_process))
             
-            # Handle both single doc (PDF) and list of docs (spreadsheet)
-            if isinstance(result, list):
-                ingested_files.append((path.name, f"{len(result)} sheets"))
-            else:
-                ingested_files.append((path.name, "1 document"))
+            for path in files_to_process:
+                ext = path.suffix.lower()
+                if ext not in SUPPORTED_EXTENSIONS:
+                    skipped_files.append((path.name, f"unsupported type {ext}"))
+                    progress.advance(task)
+                    continue
+                
+                # Validate file before ingestion
+                is_valid, error = validate_file_for_ingestion(path)
+                if not is_valid:
+                    skipped_files.append((path.name, error))
+                    logger.warning(f"Skipping invalid file: {error}")
+                    progress.advance(task)
+                    continue
+                
+                # Update progress description
+                progress.update(task, description=f"Processing {path.name[:40]}...")
+                
+                logger.info(f"Ingesting file: {path.name} ({path.stat().st_size / 1024 / 1024:.1f}MB)")
+                
+                try:
+                    result = await agent.ingest_document(path)
+                    
+                    # Handle both single doc (PDF) and list of docs (spreadsheet)
+                    if isinstance(result, list):
+                        ingested_files.append((path.name, f"{len(result)} sheets"))
+                    else:
+                        ingested_files.append((path.name, "1 document"))
+                    
+                except Exception as e:
+                    failed_files.append((path.name, str(e)))
+                
+                progress.advance(task)
+    else:
+        # Single file mode - no progress bar
+        for path in files_to_process:
+            ext = path.suffix.lower()
+            if ext not in SUPPORTED_EXTENSIONS:
+                skipped_files.append((path.name, f"unsupported type {ext}"))
+                continue
             
-            if not show_progress:
-                print(f"✅ {path.name}")
+            # Validate file before ingestion
+            is_valid, error = validate_file_for_ingestion(path)
+            if not is_valid:
+                skipped_files.append((path.name, error))
+                logger.warning(f"Skipping invalid file: {error}")
+                continue
             
-        except Exception as e:
-            failed_files.append((path.name, str(e)))
-            if not show_progress:
-                print(f"❌ {path.name}: {e}")
+            logger.info(f"Ingesting file: {path.name} ({path.stat().st_size / 1024 / 1024:.1f}MB)")
+            console.print(f"[muted]Processing:[/muted] {path.name}")
+            
+            try:
+                result = await agent.ingest_document(path)
+                
+                # Handle both single doc (PDF) and list of docs (spreadsheet)
+                if isinstance(result, list):
+                    ingested_files.append((path.name, f"{len(result)} sheets"))
+                else:
+                    ingested_files.append((path.name, "1 document"))
+                
+                print_success(f"Ingested: {path.name}")
+                
+            except Exception as e:
+                failed_files.append((path.name, str(e)))
+                print_error(f"{path.name}: {e}")
     
     # Print summary
     stats = agent.get_stats()
-    print("\n" + "=" * 60)
-    print("INGESTION SUMMARY")
-    print("=" * 60)
-    
-    print(f"\n📊 Results: {len(ingested_files)} ingested, {len(skipped_files)} skipped, {len(failed_files)} failed")
-    
-    if ingested_files and len(ingested_files) <= 10:
-        print("\n✅ Successfully ingested:")
-        for name, detail in ingested_files:
-            print(f"   • {name} ({detail})")
-    elif ingested_files:
-        print(f"\n✅ Successfully ingested {len(ingested_files)} files")
-    
-    if skipped_files:
-        print("\n⚠️  Skipped:")
-        for name, reason in skipped_files[:5]:
-            print(f"   • {name} ({reason})")
-        if len(skipped_files) > 5:
-            print(f"   ... and {len(skipped_files) - 5} more")
-    
-    if failed_files:
-        print("\n❌ Failed:")
-        for name, error in failed_files[:5]:
-            print(f"   • {name}: {error}")
-        if len(failed_files) > 5:
-            print(f"   ... and {len(failed_files) - 5} more")
-    
-    print("\n" + "-" * 60)
-    print("KNOWLEDGE BASE STATISTICS")
-    print("-" * 60)
-    print(f"  Total Documents: {stats['document_count']}")
-    print(f"    - PDFs: {stats['pdf_count']}")
-    print(f"    - Spreadsheet Sheets: {stats['spreadsheet_sheet_count']}")
-    print(f"  SQL Tables: {stats['table_count']}")
-    print(f"  Text Chunks: {stats['chunk_count']}")
+    print_ingestion_summary(ingested_files, skipped_files, failed_files, stats)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        console.print("\n[yellow]Ingestion cancelled by user.[/yellow]")
+        sys.exit(0)
+    except Exception as e:
+        console.print(f"\n[bold red]Fatal error during ingestion:[/bold red] {e}")
+        sys.exit(1)

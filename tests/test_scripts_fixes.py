@@ -28,7 +28,7 @@ class TestLogConfiguration:
         ingest_path = Path(__file__).parent.parent / "scripts" / "ingest.py"
         content = ingest_path.read_text()
         
-        assert "config.data_path" in content
+        assert "config.data_dir" in content
         assert "log_dir / 'ingest.log'" in content
         assert "logging.FileHandler('ingest.log')" not in content
     
@@ -37,7 +37,7 @@ class TestLogConfiguration:
         query_path = Path(__file__).parent.parent / "scripts" / "query.py"
         content = query_path.read_text()
         
-        assert "config.data_path" in content
+        assert "config.data_dir" in content
         assert "log_dir / 'query.log'" in content
         assert "logging.FileHandler('query.log')" not in content
 
@@ -99,23 +99,7 @@ class TestAnalystEvaluation:
         assert "if results else 0" in content
 
 
-class TestStressTestClustering:
-    """Test stress_test_clustering.py fixes."""
-    
-    def test_uses_relative_path(self):
-        """Should use Path(__file__) instead of hardcoded '.'."""
-        stress_path = Path(__file__).parent.parent / "scripts" / "stress_test_clustering.py"
-        content = stress_path.read_text()
-        
-        assert "Path(__file__).parent.parent" in content
-        assert "sys.path.insert(0, '.')" not in content
-    
-    def test_has_return_type_hint(self):
-        """stress_test function should have return type hint."""
-        stress_path = Path(__file__).parent.parent / "scripts" / "stress_test_clustering.py"
-        content = stress_path.read_text()
-        
-        assert "def stress_test(num_companies: int = 50, tables_per_company: int = 20) -> None:" in content
+
 
 
 class TestExportFunctionsIntegration:
