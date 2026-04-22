@@ -1,12 +1,13 @@
 """Pydantic models for Finance RAG."""
 
 from __future__ import annotations
-from enum import Enum
-from typing import Any, Literal
-from pydantic import BaseModel, Field
-from datetime import datetime, timezone
-import hashlib
 
+import hashlib
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 # =============================================================================
 # Tool Models
@@ -456,7 +457,7 @@ class ComparabilityResult(BaseModel):
             diff_a = set(field_a.excludes_items) - set(field_b.excludes_items)
             diff_b = set(field_b.excludes_items) - set(field_a.excludes_items)
             if diff_a or diff_b:
-                warnings.append(f"Different exclusions applied to metrics")
+                warnings.append("Different exclusions applied to metrics")
                 confidence = min(confidence, 0.6)
         
         # Build recommendation

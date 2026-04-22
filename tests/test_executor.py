@@ -1,9 +1,11 @@
 """Tests for the DAG executor."""
 
-import pytest
 import asyncio
+
+import pytest
+
+from src.agent.executor import DAGExecutor, ExecutionMonitor
 from src.models import ExecutionPlan, ToolCall, ToolName
-from src.agent.executor import DAGExecutor
 
 
 class TestDAGExecutor:
@@ -137,6 +139,33 @@ class TestDAGExecutor:
         assert results["step_3"].result.result == 600.0  # CalculationTranscript.result
         assert results["step_4"].result.result == 60.0  # 60% profit margin
 
+    def test_execution_monitor_matches_executor_results(self, executor):
+        """Monitored execution should return the same results as plain execution."""
+        plan = ExecutionPlan(
+            query="Monitored calculation",
+            reasoning="Parity test",
+            steps=[
+                ToolCall(id="step_1", tool=ToolName.CALCULATOR, input="25", depends_on=[], description="Base"),
+                ToolCall(id="step_2", tool=ToolName.CALCULATOR, input="{step_1} * 4", depends_on=["step_1"], description="Multiply"),
+            ],
+        )
+
+        plain_results = asyncio.run(executor.execute(plan))
+
+        monitor = ExecutionMonitor()
+        monitored_results, timing = asyncio.run(monitor.execute_with_monitoring(executor, plan))
+
+        assert plain_results.keys() == monitored_results.keys()
+        for step_id in plain_results:
+            assert plain_results[step_id].success == monitored_results[step_id].success
+            assert plain_results[step_id].tool == monitored_results[step_id].tool
+            assert plain_results[step_id].error == monitored_results[step_id].error
+            assert plain_results[step_id].result.result == monitored_results[step_id].result.result
+
+        assert timing["step_count"] == 2
+        assert timing["layer_count"] == 2
+        assert set(timing["step_times_ms"].keys()) == {"step_1", "step_2"}
+
 
 class TestExecutionLayers:
     """Test the execution layer grouping."""
@@ -196,4 +225,3 @@ class TestExecutionLayers:
         assert layers[0][0].id == "a"
         assert set(s.id for s in layers[1]) == {"b", "c"}
         assert layers[2][0].id == "d"
-

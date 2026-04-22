@@ -2,13 +2,13 @@
 
 import json
 import logging
-import re
+import shutil
 from pathlib import Path
 from typing import Any
-import shutil
 
-from ..models import Document, TextChunk
 from ..config import config
+from ..models import Document
+from ..validation import sanitize_filename, validate_document_id, validate_safe_filename
 
 logger = logging.getLogger(__name__)
 
@@ -41,27 +41,12 @@ def secure_path_join(base_path: Path, untrusted_path: str) -> Path:
     Raises:
         PathSecurityError: If the path is unsafe
     """
-    if not untrusted_path:
-        raise PathSecurityError("Empty path not allowed")
-    
-    # Extract just the filename, removing any directory components
-    safe_name = Path(untrusted_path).name
-    
-    # Check for null bytes
-    if '\x00' in safe_name:
-        raise PathSecurityError("Null byte in filename")
-    
-    # Remove any remaining traversal patterns
-    if '..' in safe_name:
-        safe_name = safe_name.replace('..', '_')
-    
-    # Sanitize: only allow alphanumeric, hyphens, underscores, dots, spaces
-    # This is strict but safe for document filenames
-    if not re.match(r'^[\w\-. ]+$', safe_name):
-        # Create a sanitized version
-        safe_name = re.sub(r'[^\w\-. ]', '_', safe_name)
-    
-    if not safe_name or safe_name in ('.', '..'):
+    is_valid, error = validate_safe_filename(untrusted_path)
+    if not is_valid:
+        raise PathSecurityError(error)
+
+    safe_name = sanitize_filename(untrusted_path)
+    if not safe_name or safe_name in (".", ".."):
         raise PathSecurityError(f"Invalid filename: {untrusted_path}")
     
     # Construct full path
@@ -74,20 +59,6 @@ def secure_path_join(base_path: Path, untrusted_path: str) -> Path:
         raise PathSecurityError(f"Path traversal detected: {untrusted_path}")
     
     return full_path
-
-
-def validate_document_id(doc_id: str) -> bool:
-    """
-    Validate that a document ID is safe to use in filenames.
-    
-    Document IDs should be hex strings from hash functions.
-    """
-    if not doc_id:
-        return False
-    # Only allow alphanumeric and hyphens/underscores (typical for IDs)
-    return bool(re.match(r'^[a-zA-Z0-9_-]+$', doc_id))
-
-
 class DocumentStore:
     """
     Simple file-based store for full document content.
@@ -301,4 +272,3 @@ class DocumentStore:
                     })
         
         return results
-

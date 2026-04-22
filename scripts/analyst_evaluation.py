@@ -14,21 +14,20 @@ Usage:
     python scripts/analyst_evaluation.py --output results.md
 """
 
-import sys
 import asyncio
-import time
 import json
-from pathlib import Path
+import sys
+import time
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from dataclasses import dataclass, asdict
-from typing import Optional
+from pathlib import Path
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.config import config
-from src.rag_agent import RAGAgent
 from src.llm_client import get_llm_client
+from src.rag_agent import RAGAgent
+
 
 @dataclass
 class QueryResult:
@@ -208,7 +207,7 @@ async def run_evaluation():
     # Initialize agent
     llm_client = get_llm_client(provider="auto", model=None)
     if llm_client:
-        print(f"✓ LLM client initialized")
+        print("✓ LLM client initialized")
     else:
         print("⚠ No LLM configured - results may be limited")
     
@@ -348,8 +347,8 @@ def generate_markdown_report(results: list[QueryResult], stats: dict, output_pat
         "",
         "## Executive Summary",
         "",
-        f"| Metric | Value |",
-        f"|--------|-------|",
+        "| Metric | Value |",
+        "|--------|-------|",
         f"| Total Queries | {len(results)} |",
         f"| Documents in Corpus | {stats['document_count']} |",
         f"| Total Chunks | {stats['chunk_count']} |",

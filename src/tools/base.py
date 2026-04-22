@@ -1,8 +1,8 @@
 """Base class for all tools."""
 
+import time
 from abc import ABC, abstractmethod
 from typing import Any
-import time
 
 from ..models import ToolName, ToolResult
 

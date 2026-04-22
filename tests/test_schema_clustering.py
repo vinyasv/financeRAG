@@ -1,13 +1,14 @@
 """Tests for schema clustering functionality."""
 
+import asyncio
+
 import pytest
+
 from src.storage.schema_cluster import (
+    DOMAIN_MAP,
     SchemaClusterManager,
-    SchemaCluster,
-    extract_company_from_table_name,
     extract_company_from_query,
-    FINANCIAL_DOMAINS,
-    DOMAIN_MAP
+    extract_company_from_table_name,
 )
 
 
@@ -69,45 +70,48 @@ class TestDomainMatching:
 class TestSchemaClusterManager:
     """Tests for the cluster manager."""
     
-    @pytest.mark.asyncio
-    async def test_assign_table_to_cluster(self):
+    def test_assign_table_to_cluster(self):
         manager = SchemaClusterManager()
         
-        cluster_id = await manager.assign_table(
-            table_name="nvidia_income_statement",
-            columns=["year", "revenue", "net_income"],
-            schema_description="NVIDIA annual income statement"
+        cluster_id = asyncio.run(
+            manager.assign_table(
+                table_name="nvidia_income_statement",
+                columns=["year", "revenue", "net_income"],
+                schema_description="NVIDIA annual income statement"
+            )
         )
         
         assert cluster_id == "nvidia_financial_statements"
         assert "nvidia_income_statement" in manager.clusters[cluster_id].table_names
     
-    @pytest.mark.asyncio
-    async def test_assign_multiple_tables_same_cluster(self):
+    def test_assign_multiple_tables_same_cluster(self):
         manager = SchemaClusterManager()
         
-        await manager.assign_table(
-            table_name="nvidia_income_statement",
-            columns=["year", "revenue"],
-            schema_description=""
+        asyncio.run(
+            manager.assign_table(
+                table_name="nvidia_income_statement",
+                columns=["year", "revenue"],
+                schema_description=""
+            )
         )
-        await manager.assign_table(
-            table_name="nvidia_balance_sheet",
-            columns=["assets", "liabilities"],
-            schema_description=""
+        asyncio.run(
+            manager.assign_table(
+                table_name="nvidia_balance_sheet",
+                columns=["assets", "liabilities"],
+                schema_description=""
+            )
         )
         
         cluster = manager.clusters["nvidia_financial_statements"]
         assert "nvidia_income_statement" in cluster.table_names
         assert "nvidia_balance_sheet" in cluster.table_names
     
-    @pytest.mark.asyncio
-    async def test_entity_isolation(self):
+    def test_entity_isolation(self):
         """NVIDIA data should never be in same cluster as JPMorgan."""
         manager = SchemaClusterManager()
         
-        await manager.assign_table("nvidia_revenue", ["revenue"], "")
-        await manager.assign_table("jpmorgan_revenue", ["revenue"], "")
+        asyncio.run(manager.assign_table("nvidia_revenue", ["revenue"], ""))
+        asyncio.run(manager.assign_table("jpmorgan_revenue", ["revenue"], ""))
         
         nvidia_cluster = manager.clusters.get("nvidia_financial_statements")
         jpmorgan_cluster = manager.clusters.get("jpmorgan_financial_statements")
@@ -121,13 +125,12 @@ class TestSchemaClusterManager:
         assert "jpmorgan_revenue" in jpmorgan_cluster.table_names
         assert "jpmorgan_revenue" not in nvidia_cluster.table_names
     
-    @pytest.mark.asyncio
-    async def test_get_relevant_clusters_company_filter(self):
+    def test_get_relevant_clusters_company_filter(self):
         """Query mentioning NVIDIA should only return NVIDIA clusters."""
         manager = SchemaClusterManager()
         
-        await manager.assign_table("nvidia_revenue", ["revenue"], "")
-        await manager.assign_table("jpmorgan_revenue", ["revenue"], "")
+        asyncio.run(manager.assign_table("nvidia_revenue", ["revenue"], ""))
+        asyncio.run(manager.assign_table("jpmorgan_revenue", ["revenue"], ""))
         
         clusters = manager.get_relevant_clusters("What was NVIDIA's revenue?")
         
@@ -142,12 +145,11 @@ class TestSchemaClusterManager:
         
         assert clusters == []
     
-    @pytest.mark.asyncio
-    async def test_get_stats(self):
+    def test_get_stats(self):
         manager = SchemaClusterManager()
         
-        await manager.assign_table("nvidia_revenue", ["revenue"], "")
-        await manager.assign_table("jpmorgan_balance", ["assets"], "")
+        asyncio.run(manager.assign_table("nvidia_revenue", ["revenue"], ""))
+        asyncio.run(manager.assign_table("jpmorgan_balance", ["assets"], ""))
         
         stats = manager.get_stats()
         

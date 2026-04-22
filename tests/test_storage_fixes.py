@@ -7,28 +7,23 @@ Tests:
 - SchemaClusterManager: cache TTL, keyword limits
 """
 
-import json
-import os
 import sys
 import tempfile
 import threading
-import time
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import pytest
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.storage.sqlite_store import SQLiteStore, validate_identifier, SecurityError
-from src.storage.document_store import DocumentStore, PathSecurityError
 from src.storage.chroma_store import ChromaStore
+from src.storage.document_store import DocumentStore
 from src.storage.schema_cluster import (
-    SchemaClusterManager,
     MAX_DESCRIPTION_KEYWORDS,
-    CACHE_TTL_SECONDS
+    SchemaClusterManager,
 )
+from src.storage.sqlite_store import SecurityError, SQLiteStore, validate_identifier
 
 
 class TestSQLiteStoreFixes:
@@ -209,8 +204,7 @@ This starts a new section with hash.
 class TestSchemaClusterFixes:
     """Tests for SchemaClusterManager performance fixes."""
     
-    @pytest.mark.asyncio
-    async def test_keyword_extraction_limit(self):
+    def test_keyword_extraction_limit(self):
         """Keywords from description should be limited."""
         manager = SchemaClusterManager()
         
@@ -227,8 +221,7 @@ class TestSchemaClusterFixes:
         # The limit applies only to description words
         assert len(keywords) <= MAX_DESCRIPTION_KEYWORDS + 10  # buffer for table/column keywords
     
-    @pytest.mark.asyncio
-    async def test_cache_has_ttl(self):
+    def test_cache_has_ttl(self):
         """Cache should have TTL mechanism."""
         manager = SchemaClusterManager()
         
@@ -236,8 +229,7 @@ class TestSchemaClusterFixes:
         assert hasattr(manager, '_cache_timestamp')
         assert manager._cache_timestamp == 0.0  # Initial value
     
-    @pytest.mark.asyncio
-    async def test_cache_ttl_refresh_logic(self):
+    def test_cache_ttl_refresh_logic(self):
         """Cache should refresh after TTL expires."""
         # This tests the TTL logic by checking the source code
         import inspect

@@ -1,13 +1,15 @@
 """Spreadsheet parsing for Excel and CSV files."""
 
 import logging
-from pathlib import Path
-from dataclasses import dataclass
-from typing import Any
-import hashlib
 import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import pandas as pd
+
+from ..common.ids import sheet_document_id
+from ..common.naming import sanitize_table_name as sanitize_sql_table_name
 
 logger = logging.getLogger(__name__)
 
@@ -244,20 +246,9 @@ class SpreadsheetParser:
     @staticmethod
     def generate_document_id(filename: str, sheet_name: str | None = None) -> str:
         """Generate unique document ID from filename and optional sheet name."""
-        content = filename
-        if sheet_name:
-            content = f"{filename}:{sheet_name}"
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
+        return sheet_document_id(filename, sheet_name or "")
     
     @staticmethod
     def sanitize_table_name(name: str) -> str:
         """Sanitize sheet name for use as SQL table name."""
-        # Replace non-alphanumeric with underscore, lowercase
-        sanitized = re.sub(r'[^a-zA-Z0-9]+', '_', name.lower())
-        sanitized = sanitized.strip('_')
-        
-        # Ensure it doesn't start with a number
-        if sanitized and sanitized[0].isdigit():
-            sanitized = f"sheet_{sanitized}"
-        
-        return sanitized[:50] if sanitized else "unnamed_sheet"
+        return sanitize_sql_table_name(name, numeric_prefix="sheet_")

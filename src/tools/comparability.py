@@ -4,7 +4,7 @@ This module provides functions to check whether fields from different tables
 or time periods can be meaningfully compared or computed together.
 """
 
-from ..models import FieldDefinition, ComparabilityResult, AccountingStandard, QueryRefusal, RefusalReason
+from ..models import ComparabilityResult, FieldDefinition, QueryRefusal, RefusalReason
 
 
 def check_field_comparability(field_a: FieldDefinition, field_b: FieldDefinition) -> ComparabilityResult:
@@ -88,7 +88,7 @@ def create_comparability_refusal(
     
     # Suggested alternatives
     alternatives = [
-        f"Query each metric separately to understand their individual values",
+        "Query each metric separately to understand their individual values",
         "Verify that both metrics use the same accounting methodology",
     ]
     if "accounting standard" in str(result.differences).lower():

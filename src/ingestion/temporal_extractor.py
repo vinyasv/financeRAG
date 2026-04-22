@@ -3,7 +3,6 @@
 import re
 from typing import Any
 
-
 # Patterns for fiscal quarters
 FISCAL_QUARTER_PATTERNS = [
     r'(Q[1-4])',  # Q1, Q2, Q3, Q4

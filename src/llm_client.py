@@ -1,12 +1,10 @@
 """LLM client abstraction for flexible provider support."""
 
-from abc import ABC, abstractmethod
-from typing import Any
 import os
+from abc import ABC, abstractmethod
 
 # Ensure .env is loaded
 from .config import config as _config  # noqa: F401
-
 
 # OpenRouter popular models
 OPENROUTER_MODELS = {
@@ -60,167 +58,135 @@ class LLMClient(ABC):
         raise NotImplementedError("Vision not supported by this client")
 
 
-class OpenRouterClient(LLMClient):
+class OpenAICompatibleClient(LLMClient):
+    """Shared implementation for OpenAI-compatible chat providers."""
+
+    provider = "openai-compatible"
+
+    def __init__(self, api_key: str | None, model: str):
+        self.api_key = api_key
+        self.model = model
+        self._client = None
+
+    def _client_kwargs(self) -> dict[str, str]:
+        return {}
+
+    def _extra_headers(self) -> dict[str, str] | None:
+        return None
+
+    def _ensure_client(self) -> None:
+        if self._client is None:
+            from openai import AsyncOpenAI
+
+            self._client = AsyncOpenAI(api_key=self.api_key, **self._client_kwargs())
+
+    async def _chat_completion(
+        self,
+        messages: list[dict],
+        *,
+        model: str | None = None,
+        temperature: float = 0.1,
+        max_tokens: int | None = None,
+    ) -> str:
+        self._ensure_client()
+
+        request = {
+            "model": model or self.model,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if max_tokens is not None:
+            request["max_tokens"] = max_tokens
+
+        extra_headers = self._extra_headers()
+        if extra_headers:
+            request["extra_headers"] = extra_headers
+
+        response = await self._client.chat.completions.create(**request)
+        return response.choices[0].message.content or ""
+
+    async def generate(self, prompt: str) -> str:
+        return await self._chat_completion([{"role": "user", "content": prompt}])
+
+
+class OpenRouterClient(OpenAICompatibleClient):
     """
     OpenRouter API client - access many models with one API key.
-    
+
     OpenRouter uses OpenAI-compatible API, so we use the OpenAI client
     with a different base URL.
-    
+
     Get your API key at: https://openrouter.ai/keys
     """
-    
+
     BASE_URL = "https://openrouter.ai/api/v1"
-    
+    provider = "openrouter"
+
     def __init__(
         self,
         api_key: str | None = None,
         model: str = "gpt-4o-mini",
         site_url: str | None = None,
-        app_name: str = "Finance RAG"
+        app_name: str = "Finance RAG",
     ):
-        """
-        Initialize OpenRouter client.
-        
-        Args:
-            api_key: OpenRouter API key (or set OPENROUTER_API_KEY env var)
-            model: Model name - can be short name (e.g., "gpt-4o-mini") or 
-                   full OpenRouter name (e.g., "openai/gpt-4o-mini")
-            site_url: Optional URL of your site for rankings
-            app_name: Name of your app for rankings
-        """
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
+        resolved_model = OPENROUTER_MODELS.get(model, model)
+        super().__init__(api_key=api_key or os.getenv("OPENROUTER_API_KEY"), model=resolved_model)
         self.site_url = site_url
         self.app_name = app_name
-        self._client = None
-        
-        # Resolve model name
-        if model in OPENROUTER_MODELS:
-            self.model = OPENROUTER_MODELS[model]
-        else:
-            self.model = model
-    
-    def _ensure_client(self):
-        if self._client is None:
-            from openai import AsyncOpenAI
-            
-            self._client = AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=self.BASE_URL
-            )
-    
-    async def generate(self, prompt: str) -> str:
-        self._ensure_client()
-        
-        # Build extra headers for OpenRouter
+
+    def _client_kwargs(self) -> dict[str, str]:
+        return {"base_url": self.BASE_URL}
+
+    def _extra_headers(self) -> dict[str, str] | None:
         extra_headers = {}
         if self.site_url:
             extra_headers["HTTP-Referer"] = self.site_url
         if self.app_name:
             extra_headers["X-Title"] = self.app_name
-        
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            extra_headers=extra_headers if extra_headers else None
-        )
-        
-        return response.choices[0].message.content or ""
-    
+        return extra_headers or None
+
     async def generate_with_image(
         self,
         prompt: str,
         image_base64: str,
         image_media_type: str = "image/png",
-        model: str | None = None
+        model: str | None = None,
     ) -> str:
-        """
-        Generate a response using a vision-capable model with an image.
-        
-        Args:
-            prompt: Text prompt describing what to do with the image
-            image_base64: Base64-encoded image data
-            image_media_type: MIME type of the image (default: image/png)
-            model: Optional model override (must be vision-capable)
-            
-        Returns:
-            LLM response text
-        """
-        self._ensure_client()
-        
-        # Use specified model or default LLM model from config
+        """Generate a response using a vision-capable model with an image."""
         vision_model = model or _config.llm_model
-        
-        # Build extra headers for OpenRouter
-        extra_headers = {}
-        if self.site_url:
-            extra_headers["HTTP-Referer"] = self.site_url
-        if self.app_name:
-            extra_headers["X-Title"] = self.app_name
-        
-        # Build message with image using OpenAI vision format
         messages = [
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "text",
-                        "text": prompt
-                    },
+                    {"type": "text", "text": prompt},
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{image_media_type};base64,{image_base64}"
-                        }
-                    }
-                ]
+                        "image_url": {"url": f"data:{image_media_type};base64,{image_base64}"},
+                    },
+                ],
             }
         ]
-        
-        response = await self._client.chat.completions.create(
-            model=vision_model,
-            messages=messages,
-            temperature=0.1,
-            max_tokens=4096,
-            extra_headers=extra_headers if extra_headers else None
-        )
-        
-        return response.choices[0].message.content or ""
-    
+        return await self._chat_completion(messages, model=vision_model, max_tokens=4096)
+
     @classmethod
     def list_models(cls) -> dict[str, str]:
         """List available model shortcuts."""
         return OPENROUTER_MODELS.copy()
 
 
-class OpenAIClient(LLMClient):
+class OpenAIClient(OpenAICompatibleClient):
     """Direct OpenAI API client."""
-    
+
+    provider = "openai"
+
     def __init__(self, api_key: str | None = None, model: str = "gpt-4o-mini"):
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.model = model
-        self._client = None
-    
-    def _ensure_client(self):
-        if self._client is None:
-            from openai import AsyncOpenAI
-            self._client = AsyncOpenAI(api_key=self.api_key)
-    
-    async def generate(self, prompt: str) -> str:
-        self._ensure_client()
-        
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1
-        )
-        
-        return response.choices[0].message.content or ""
+        super().__init__(api_key=api_key or os.getenv("OPENAI_API_KEY"), model=model)
 
 
 class AnthropicClient(LLMClient):
     """Direct Anthropic API client."""
+
+    provider = "anthropic"
     
     def __init__(self, api_key: str | None = None, model: str = "claude-3-haiku-20240307"):
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
@@ -246,6 +212,8 @@ class AnthropicClient(LLMClient):
 
 class MockLLMClient(LLMClient):
     """Mock LLM client for testing without API calls."""
+
+    provider = "mock"
     
     def __init__(self, responses: dict[str, str] | None = None):
         self.responses = responses or {}
@@ -310,4 +278,3 @@ def get_llm_client(
         return AnthropicClient(model=default_model)
     
     raise ValueError(f"Unknown LLM provider: {provider}. Valid options: 'auto', 'openrouter', 'openai', 'anthropic', 'none'")
-

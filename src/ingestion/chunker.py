@@ -3,9 +3,9 @@
 import re
 from dataclasses import dataclass
 
+from ..common.ids import chunk_id
 from ..models import TextChunk
 from .pdf_parser import ParsedPDF
-from .utils import generate_chunk_id
 
 
 @dataclass
@@ -240,7 +240,7 @@ class SemanticChunker:
         end_line: int | None = None
     ) -> TextChunk:
         """Create a TextChunk instance with contextual prefix for better embedding."""
-        chunk_id = generate_chunk_id(document_id, chunk_index)
+        generated_chunk_id = chunk_id(document_id, chunk_index)
         
         # Add contextual prefix for better embedding quality
         # This helps the embedding model understand the context
@@ -258,7 +258,7 @@ class SemanticChunker:
             contextual_content = content
         
         return TextChunk(
-            id=chunk_id,
+            id=generated_chunk_id,
             document_id=document_id,
             content=contextual_content,
             page_number=page_number,
@@ -267,4 +267,3 @@ class SemanticChunker:
             start_line=start_line,
             end_line=end_line
         )
-

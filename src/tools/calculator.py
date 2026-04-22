@@ -5,8 +5,8 @@ import operator
 import re
 from typing import Any
 
+from ..models import CalculationTranscript, OperandBinding, QueryRefusal, RefusalReason, ToolName
 from .base import Tool
-from ..models import ToolName, CalculationTranscript, OperandBinding, QueryRefusal, RefusalReason
 
 
 class ComparabilityError(Exception):

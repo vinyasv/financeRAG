@@ -1,9 +1,10 @@
 """PDF parsing with text and table extraction."""
 
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
-import hashlib
+
+from ..common.ids import document_id_from_filename
 
 
 @dataclass
@@ -134,7 +135,4 @@ class PDFParser:
     @staticmethod
     def generate_document_id(filename: str) -> str:
         """Generate a unique document ID from filename."""
-        # Use hash of filename for consistent IDs
-        hash_input = filename.encode()
-        return hashlib.sha256(hash_input).hexdigest()[:16]
-
+        return document_id_from_filename(filename)

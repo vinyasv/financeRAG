@@ -1,9 +1,11 @@
 """Tests for VisionTableExtractor (Docling)."""
 
-import pytest
+import asyncio
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
+
 import pandas as pd
+import pytest
 
 from src.ingestion.vision_table_extractor import VisionTableExtractor
 from src.models import ExtractedTable
@@ -74,8 +76,7 @@ class TestVisionTableExtractor:
         assert "revenue" in table.columns
         assert "profit" in table.columns
 
-    @pytest.mark.asyncio
-    async def test_extract_tables_docling_mock(self, extractor, tmp_path):
+    def test_extract_tables_docling_mock(self, extractor, tmp_path):
         """Test extraction using mocked Docling converter."""
         # Mock file
         pdf_path = tmp_path / "test.pdf"
@@ -103,9 +104,11 @@ class TestVisionTableExtractor:
         extractor._converter = mock_converter
         
         # Run extraction
-        tables = await extractor.extract_tables_from_pdf(
-            pdf_path=pdf_path,
-            document_id="test_doc"
+        tables = asyncio.run(
+            extractor.extract_tables_from_pdf(
+                pdf_path=pdf_path,
+                document_id="test_doc"
+            )
         )
         
         # Verify
@@ -126,16 +129,17 @@ class TestIntegration:
             return path
         pytest.skip("No sample PDF available for integration test")
     
-    @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_real_pdf_extraction(self, sample_pdf_path):
+    def test_real_pdf_extraction(self, sample_pdf_path):
         """Test extraction on a real PDF file."""
         extractor = VisionTableExtractor()
         
-        tables = await extractor.extract_tables_from_pdf(
-            pdf_path=sample_pdf_path,
-            document_id="integration_test",
-            max_tables=3  # Limit for speed
+        tables = asyncio.run(
+            extractor.extract_tables_from_pdf(
+                pdf_path=sample_pdf_path,
+                document_id="integration_test",
+                max_tables=3  # Limit for speed
+            )
         )
         
         assert isinstance(tables, list)

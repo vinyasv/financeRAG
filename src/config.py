@@ -1,8 +1,8 @@
 """Configuration for Finance RAG."""
 
 import os
-from pathlib import Path
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 def _load_dotenv():

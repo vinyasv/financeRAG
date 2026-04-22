@@ -1,14 +1,11 @@
 """Tool for retrieving full document content."""
 
-import re
 from typing import Any
 
-from .base import Tool
 from ..models import ToolName
 from ..storage.document_store import DocumentStore
-
-# Regex for valid document IDs (hex hash strings or alphanumeric with underscores/hyphens)
-VALID_DOC_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
+from ..validation import validate_document_id
+from .base import Tool
 
 
 class GetDocumentTool(Tool):
@@ -44,7 +41,7 @@ class GetDocumentTool(Tool):
         # Validate document ID format
         if not doc_id:
             return {"error": "Document ID is required"}
-        if not VALID_DOC_ID_PATTERN.match(doc_id):
+        if not validate_document_id(doc_id):
             return {"error": f"Invalid document ID format: {doc_id}"}
         
         # Get document
@@ -85,4 +82,3 @@ class GetDocumentTool(Tool):
             }
             for doc in docs
         ]
-

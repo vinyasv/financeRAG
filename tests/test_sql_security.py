@@ -8,11 +8,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.storage.sqlite_store import (
-    validate_sql_query, 
-    add_limit_clause, 
     SecurityError,
     SQLiteStore,
-    validate_identifier
+    add_limit_clause,
+    validate_identifier,
+    validate_sql_query,
 )
 
 
@@ -66,7 +66,7 @@ def test_validate_sql_query():
         print(f"  {status}: {query[:50]}... [{expected_reason}]")
         if is_valid:
             all_passed = False
-            print(f"    ⚠️  WARNING: This query should have been blocked!")
+            print("    ⚠️  WARNING: This query should have been blocked!")
     
     assert all_passed, "Some SQL validation tests failed"
 
@@ -162,7 +162,7 @@ def test_validate_identifier():
             result = validate_identifier(identifier)
             print(f"  ✓: {identifier}")
             if result != identifier:
-                print(f"    ⚠️ WARNING: Result doesn't match input!")
+                print("    ⚠️ WARNING: Result doesn't match input!")
                 all_passed = False
         except SecurityError as e:
             print(f"  ✗ BLOCKED incorrectly: {identifier} → {e}")

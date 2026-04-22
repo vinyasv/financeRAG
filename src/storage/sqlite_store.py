@@ -1,17 +1,17 @@
 """SQLite storage for structured data (extracted tables)."""
 
-import sqlite3
 import json
-import re
 import logging
+import re
+import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-from contextlib import contextmanager
 
 import pandas as pd
 
-from ..models import Document, ExtractedTable, TableSchema
 from ..config import config
+from ..models import Document, ExtractedTable, TableSchema
 
 logger = logging.getLogger(__name__)
 
@@ -701,17 +701,17 @@ class SQLiteStore:
                 doc_name = doc_id
             
             # Add document header
-            schema_parts.append(f"\n-- ───────────────────────────────────────────────────────────────────────────")
+            schema_parts.append("\n-- ───────────────────────────────────────────────────────────────────────────")
             schema_parts.append(f"-- 📄 DOCUMENT: {doc_name}")
             schema_parts.append(f"--    Tables: {len(doc_tables)}")
-            schema_parts.append(f"-- ───────────────────────────────────────────────────────────────────────────")
+            schema_parts.append("-- ───────────────────────────────────────────────────────────────────────────")
             
             for table in doc_tables:
                 table_name = table['table_name']
                 columns = table.get('columns', [])
                 row_count = table.get('row_count', 0)
                 
-                schema_parts.append(f"--")
+                schema_parts.append("--")
                 schema_parts.append(f"-- TABLE: {table_name} ({row_count} rows)")
                 if columns:
                     schema_parts.append(f"--   Columns: {', '.join(columns[:10])}")

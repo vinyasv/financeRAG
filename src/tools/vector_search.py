@@ -2,9 +2,9 @@
 
 from typing import Any
 
-from .base import Tool
-from ..models import ToolName, TextChunk
+from ..models import TextChunk, ToolName
 from ..storage.chroma_store import ChromaStore
+from .base import Tool
 
 
 class VectorSearchTool(Tool):

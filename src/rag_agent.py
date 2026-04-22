@@ -5,27 +5,29 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from .models import QueryResponse, Document, TextChunk, ExtractedTable
-from .config import config
-from .agent.planner import Planner
 from .agent.executor import DAGExecutor, ExecutionMonitor
+from .agent.planner import Planner
 from .agent.synthesizer import ResponseSynthesizer
-from .tools.calculator import CalculatorTool
-from .tools.sql_query import SQLQueryTool
-from .tools.vector_search import VectorSearchTool
-from .tools.get_document import GetDocumentTool
-from .storage.sqlite_store import SQLiteStore
+from .common.ids import chunk_id, document_id_from_filename, sheet_document_id
+from .common.naming import sanitize_table_name
+from .config import config
+from .ingestion.chunker import SemanticChunker
+from .ingestion.pdf_parser import PDFParser
+from .ingestion.schema_detector import SchemaDetector
+from .ingestion.spreadsheet_parser import SpreadsheetParser
+from .ingestion.table_extractor import TableExtractor
+from .ingestion.temporal_extractor import extract_temporal_metadata
+from .ingestion.vision_table_extractor import VisionTableExtractor
+from .ingestion.vlm_extractor import VLMTableExtractor
+from .models import Document, ExtractedTable, QueryResponse, TextChunk
 from .storage.chroma_store import ChromaStore
 from .storage.document_store import DocumentStore
 from .storage.schema_cluster import SchemaClusterManager
-from .ingestion.pdf_parser import PDFParser
-from .ingestion.table_extractor import TableExtractor
-from .ingestion.vision_table_extractor import VisionTableExtractor
-from .ingestion.vlm_extractor import VLMTableExtractor
-from .ingestion.chunker import SemanticChunker
-from .ingestion.schema_detector import SchemaDetector
-from .ingestion.spreadsheet_parser import SpreadsheetParser
-from .ingestion.temporal_extractor import extract_temporal_metadata
+from .storage.sqlite_store import SQLiteStore
+from .tools.calculator import CalculatorTool
+from .tools.get_document import GetDocumentTool
+from .tools.sql_query import SQLQueryTool
+from .tools.vector_search import VectorSearchTool
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +99,185 @@ class RAGAgent:
         self.vlm_extractor = VLMTableExtractor() # Primary - Cloud VLM
         self.chunker = SemanticChunker()
         self.schema_detector = SchemaDetector(llm_client=llm_client)
+
+    def _get_or_create_document(
+        self,
+        doc_id: str,
+        *,
+        filename: str,
+        title: str,
+        page_count: int,
+        metadata: dict[str, Any],
+        source_path: Path,
+        full_text: str,
+        kind: str,
+        display_name: str,
+    ) -> tuple[Document, bool]:
+        """Load an existing document or create and persist it."""
+        existing_doc = self.sqlite_store.get_document(doc_id)
+        if existing_doc:
+            logger.info(f"{kind} already ingested: {display_name} (id={doc_id}), skipping")
+            return existing_doc, False
+
+        document = Document(
+            id=doc_id,
+            filename=filename,
+            title=title,
+            page_count=page_count,
+            metadata=metadata,
+        )
+        self._persist_document_payload(document, source_path=source_path, full_text=full_text)
+        return document, True
+
+    def _persist_document_payload(
+        self,
+        document: Document,
+        *,
+        source_path: Path,
+        full_text: str,
+    ) -> None:
+        """Persist document metadata and extracted text."""
+        self.sqlite_store.save_document(document)
+        self.document_store.save_document(
+            document,
+            source_path=source_path,
+            full_text=full_text,
+        )
+
+    async def _learn_company_safe(self, source_document: str) -> None:
+        """Learn company metadata without breaking ingestion on failures."""
+        try:
+            await self.schema_cluster_manager.learn_company_from_document(source_document)
+        except Exception as exc:
+            logger.warning(f"Company learning failed for {source_document}: {exc}")
+
+    async def _assign_cluster_safe(
+        self,
+        *,
+        table_name: str,
+        columns: list[str],
+        schema_description: str,
+        source_document: str,
+    ) -> None:
+        """Assign a table to a schema cluster without failing ingestion."""
+        try:
+            await self.schema_cluster_manager.assign_table(
+                table_name=table_name,
+                columns=columns,
+                schema_description=schema_description,
+                source_document=source_document,
+            )
+        except Exception as exc:
+            logger.warning(f"Table clustering failed for {table_name}, skipping assignment: {exc}")
+
+    def _index_chunk_batch(self, chunks: list[TextChunk]) -> None:
+        """Persist a batch of chunks into the vector store."""
+        if chunks:
+            self.chroma_store.add_chunks(chunks)
+
+    async def _extract_pdf_tables(self, parsed, pdf_path: Path, doc_id: str) -> list[ExtractedTable]:
+        """Extract PDF tables using the configured fallback chain."""
+        tables: list[ExtractedTable] = []
+
+        if config.openrouter_api_key:
+            try:
+                logger.info("Using VLM Table Extractor (Cloud)")
+                tables = await self.vlm_extractor.extract_tables_from_pdf(pdf_path, doc_id)
+            except Exception as exc:
+                logger.warning(f"VLM extraction failed: {exc}, falling back to Docling")
+
+        if not tables:
+            try:
+                logger.info("Using Docling for table extraction (Local Fast Mode)")
+                tables = await self.docling_extractor.extract_tables_from_pdf(pdf_path, doc_id)
+            except Exception as exc:
+                logger.warning(f"Docling extraction failed: {exc}, falling back to rule-based")
+                tables = []
+
+        if not tables:
+            tables = self.table_extractor.extract_tables(parsed, doc_id)
+
+        return tables
+
+    async def _process_pdf_tables(self, tables: list[ExtractedTable], source_document: str) -> None:
+        """Enhance, persist, and cluster extracted PDF tables."""
+        logger.info(f"Processing {len(tables)} tables concurrently...")
+        semaphore = asyncio.Semaphore(10)
+
+        async def process_table(table: ExtractedTable) -> None:
+            async with semaphore:
+                if self.llm_client:
+                    try:
+                        logger.debug(f"Enhancing schema for table: {(table.table_name or '')[:40]}")
+                        table = await self.schema_detector.detect_schema(table)
+                        logger.debug(f"Renamed to: {table.table_name}")
+                    except Exception as exc:
+                        logger.warning(f"Schema enhancement failed for {table.id}, using original: {exc}")
+
+                self.sqlite_store.save_table(table)
+                await self._assign_cluster_safe(
+                    table_name=table.table_name,
+                    columns=table.columns,
+                    schema_description=table.schema_description,
+                    source_document=source_document,
+                )
+
+        await asyncio.gather(*[process_table(table) for table in tables])
+
+    async def _save_spreadsheet_table(
+        self,
+        *,
+        doc_id: str,
+        source_document: str,
+        sheet,
+        table_name: str,
+    ) -> None:
+        """Persist spreadsheet data and its cluster assignment."""
+        if sheet.dataframe is not None:
+            self.sqlite_store.save_spreadsheet_native(
+                table_name=table_name,
+                df=sheet.dataframe,
+                doc_id=doc_id,
+            )
+            schema_description = f"Spreadsheet data from {sheet.sheet_name}"
+        else:
+            table = ExtractedTable(
+                id=f"{doc_id}_data",
+                document_id=doc_id,
+                table_name=table_name,
+                page_number=None,
+                schema_description=f"Data from '{sheet.sheet_name}' ({sheet.row_count} rows, {sheet.col_count} columns)",
+                columns=sheet.headers,
+                rows=sheet.rows,
+            )
+            self.sqlite_store.save_table(table)
+            schema_description = table.schema_description
+
+        await self._assign_cluster_safe(
+            table_name=table_name,
+            columns=sheet.headers,
+            schema_description=schema_description,
+            source_document=source_document,
+        )
+
+    def _build_spreadsheet_chunk(self, doc_id: str, sheet) -> TextChunk:
+        """Create the canonical vector-search chunk for a spreadsheet sheet."""
+        sample_rows = min(self.SPREADSHEET_SAMPLE_ROWS, sheet.row_count)
+        return TextChunk(
+            id=chunk_id(doc_id, 0),
+            document_id=doc_id,
+            content=sheet.raw_text,
+            page_number=None,
+            section_title=sheet.sheet_name,
+            chunk_index=0,
+            start_line=1,
+            end_line=sample_rows,
+            metadata={
+                "source_type": "spreadsheet",
+                "total_rows": sheet.row_count,
+                "columns": sheet.headers[:5],
+            },
+        )
     
     async def ingest_document(self, file_path: Path) -> Document | list[Document]:
         """
@@ -143,113 +324,35 @@ class RAGAgent:
         Returns:
             The created Document record
         """
-        # Parse PDF
         parsed = self.pdf_parser.parse(pdf_path)
-        
-        # Generate document ID
-        doc_id = PDFParser.generate_document_id(pdf_path.name)
-        
-        # Check if document already exists (deduplication)
-        existing_doc = self.sqlite_store.get_document(doc_id)
-        if existing_doc:
-            logger.info(f"Document already ingested: {pdf_path.name} (id={doc_id}), skipping")
-            return existing_doc
-        
-        # Extract temporal metadata from filename
+        doc_id = document_id_from_filename(pdf_path.name)
         temporal_meta = extract_temporal_metadata(pdf_path.name, parsed.metadata)
-        
-        # Create document record with combined metadata
-        doc = Document(
-            id=doc_id,
+
+        document, created = self._get_or_create_document(
+            doc_id,
             filename=pdf_path.name,
             title=parsed.metadata.get("title", pdf_path.stem),
             page_count=parsed.page_count,
-            metadata={**parsed.metadata, **temporal_meta}
-        )
-        
-        # Save document
-        self.sqlite_store.save_document(doc)
-        self.document_store.save_document(
-            doc,
+            metadata={**parsed.metadata, **temporal_meta},
             source_path=pdf_path,
-            full_text=parsed.full_text
+            full_text=parsed.full_text,
+            kind="Document",
+            display_name=pdf_path.name,
         )
-        
-        # Learn company from document filename using LLM
-        try:
-            await self.schema_cluster_manager.learn_company_from_document(pdf_path.name)
-        except Exception as e:
-            logger.warning(f"Company learning failed for {pdf_path.name}: {e}")
-        
-        # Extract and save tables using VLM (fastest) -> Docling (local fast) -> Rule-based (fallback)
-        tables = []
-        
-        # 1. Try VLM Extractor (Sub-5s speed)
-        if config.openrouter_api_key:
-            try:
-                logger.info("Using VLM Table Extractor (Cloud)")
-                tables = await self.vlm_extractor.extract_tables_from_pdf(
-                    pdf_path, doc_id
-                )
-            except Exception as e:
-                logger.warning(f"VLM extraction failed: {e}, falling back to Docling")
-        
-        # 2. Try Docling (Fast Mode) if VLM skipped or failed
-        if not tables:
-            try:
-                logger.info("Using Docling for table extraction (Local Fast Mode)")
-                tables = await self.docling_extractor.extract_tables_from_pdf(
-                    pdf_path, doc_id
-                )
-            except Exception as e:
-                logger.warning(f"Docling extraction failed: {e}, falling back to rule-based")
-                tables = []
-        
-        # 3. Fall back to rule-based extraction
-        if not tables:
-            tables = self.table_extractor.extract_tables(parsed, doc_id)
-        
-        # Process tables concurrently to speed up schema detection and clustering
-        # Sequential processing of ~200 tables takes ~10 mins; concurrency reduces this to <1 min
-        logger.info(f"Processing {len(tables)} tables concurrently...")
-        
-        # Semaphore to limit concurrent LLM calls (prevent rate limits)
-        sem = asyncio.Semaphore(10)
-        
-        async def process_table(table):
-            async with sem:
-                # Always enhance schema with LLM for better column/table names
-                if self.llm_client:
-                    try:
-                        logger.debug(f"Enhancing schema for table: {(table.table_name or '')[:40]}")
-                        table = await self.schema_detector.detect_schema(table)
-                        logger.debug(f"Renamed to: {table.table_name}")
-                    except Exception as e:
-                        logger.warning(f"Schema enhancement failed for {table.id}, using original: {e}")
-                
-                self.sqlite_store.save_table(table)
-                
-                # Assign table to cluster for scalable context (LLM classification)
-                try:
-                    await self.schema_cluster_manager.assign_table(
-                        table_name=table.table_name,
-                        columns=table.columns,
-                        schema_description=table.schema_description,
-                        source_document=pdf_path.name
-                    )
-                except Exception as e:
-                    logger.warning(f"Table clustering failed for {table.table_name}, skipping assignment: {e}")
+        if not created:
+            return document
 
-        # Run all table processing tasks
-        await asyncio.gather(*[process_table(t) for t in tables])
-        
-        # Chunk text and store in vector DB
+        await self._learn_company_safe(pdf_path.name)
+        tables = await self._extract_pdf_tables(parsed, pdf_path, doc_id)
+        await self._process_pdf_tables(tables, pdf_path.name)
         chunks = self.chunker.chunk_document(parsed, doc_id)
-        self.chroma_store.add_chunks(chunks)
-        
-        logger.info(f"Ingested PDF: {pdf_path.name} - {parsed.page_count} pages, {len(tables)} tables (Docling), {len(chunks)} chunks")
-        
-        return doc
+        self._index_chunk_batch(chunks)
+
+        logger.info(
+            f"Ingested PDF: {pdf_path.name} - {parsed.page_count} pages, {len(tables)} tables, {len(chunks)} chunks"
+        )
+
+        return document
     
     async def _ingest_spreadsheet(self, file_path: Path) -> list[Document]:
         """
@@ -269,108 +372,41 @@ class RAGAgent:
         documents = []
         
         logger.info(f"Parsing spreadsheet: {file_path.name}")
-        
-        # Learn company from document filename using LLM
-        await self.schema_cluster_manager.learn_company_from_document(file_path.name)
+        await self._learn_company_safe(file_path.name)
         
         for sheet in parsed.sheets:
-            # Generate unique ID for this sheet
-            doc_id = SpreadsheetParser.generate_document_id(
-                file_path.name, 
-                sheet.sheet_name
-            )
-            
-            # Check if sheet already exists (deduplication)
-            existing_doc = self.sqlite_store.get_document(doc_id)
-            if existing_doc:
-                logger.info(f"Sheet already ingested: {sheet.sheet_name} (id={doc_id}), skipping")
-                documents.append(existing_doc)
-                continue
-            
-            # Create document record
-            doc = Document(
-                id=doc_id,
+            doc_id = sheet_document_id(file_path.name, sheet.sheet_name)
+            document, created = self._get_or_create_document(
+                doc_id,
                 filename=file_path.name,
                 title=f"{file_path.stem} - {sheet.sheet_name}",
-                page_count=1,  # Sheets don't have pages
+                page_count=1,
                 metadata={
                     "source_type": "spreadsheet",
                     "sheet_name": sheet.sheet_name,
                     "row_count": sheet.row_count,
                     "col_count": sheet.col_count,
-                    "columns": sheet.headers
-                }
-            )
-            
-            # Save document record
-            self.sqlite_store.save_document(doc)
-            self.document_store.save_document(
-                doc,
+                    "columns": sheet.headers,
+                },
                 source_path=file_path,
-                full_text=sheet.raw_text
+                full_text=sheet.raw_text,
+                kind="Sheet",
+                display_name=sheet.sheet_name,
             )
-            
-            # Save as native SQL table for fast queries
-            table_name = SpreadsheetParser.sanitize_table_name(sheet.sheet_name)
-            
-            # Use native table storage for large spreadsheets (much faster)
-            if sheet.dataframe is not None:
-                self.sqlite_store.save_spreadsheet_native(
-                    table_name=table_name,
-                    df=sheet.dataframe,
-                    doc_id=doc_id
-                )
-                
-                # Assign table to cluster for scalable context (LLM classification)
-                await self.schema_cluster_manager.assign_table(
-                    table_name=table_name,
-                    columns=sheet.headers,
-                    schema_description=f"Spreadsheet data from {sheet.sheet_name}",
-                    source_document=file_path.name
-                )
-            else:
-                # Fallback to EAV format for compatibility
-                table = ExtractedTable(
-                    id=f"{doc_id}_data",
-                    document_id=doc_id,
-                    table_name=table_name,
-                    page_number=None,
-                    schema_description=f"Data from '{sheet.sheet_name}' ({sheet.row_count} rows, {sheet.col_count} columns)",
-                    columns=sheet.headers,
-                    rows=sheet.rows
-                )
-                self.sqlite_store.save_table(table)
-                
-                # Assign table to cluster (was missing in original code)
-                await self.schema_cluster_manager.assign_table(
-                    table_name=table_name,
-                    columns=sheet.headers,
-                    schema_description=table.schema_description,
-                    source_document=file_path.name
-                )
-            
-            # Create text chunk for vector search with spreadsheet-specific metadata
-            # Note: For spreadsheets, we use section_title for sheet name and
-            # start_line/end_line to indicate the row range in the sample
-            sample_rows = min(self.SPREADSHEET_SAMPLE_ROWS, sheet.row_count)
-            chunk = TextChunk(
-                id=ChromaStore.generate_chunk_id(doc_id, 0),
-                document_id=doc_id,
-                content=sheet.raw_text,
-                page_number=None,  # No page for spreadsheets
-                section_title=sheet.sheet_name,  # Sheet name for section
-                chunk_index=0,
-                start_line=1,  # Row 1
-                end_line=sample_rows,  # Up to 25 rows shown in sample
-                metadata={
-                    "source_type": "spreadsheet",
-                    "total_rows": sheet.row_count,
-                    "columns": sheet.headers[:5]  # First 5 columns for context
-                }
+            if not created:
+                documents.append(document)
+                continue
+
+            table_name = sanitize_table_name(sheet.sheet_name, numeric_prefix="sheet_")
+            await self._save_spreadsheet_table(
+                doc_id=doc_id,
+                source_document=file_path.name,
+                sheet=sheet,
+                table_name=table_name,
             )
-            self.chroma_store.add_chunks([chunk])
-            
-            documents.append(doc)
+            self._index_chunk_batch([self._build_spreadsheet_chunk(doc_id, sheet)])
+
+            documents.append(document)
             logger.debug(f"Sheet '{sheet.sheet_name}': {sheet.row_count} rows, {sheet.col_count} cols -> table '{table_name}'")
         
         logger.info(f"Ingested spreadsheet: {file_path.name} - {len(parsed.sheets)} sheets, {len(documents)} tables")

@@ -1,52 +1,25 @@
 """Shared utilities for ingestion module."""
 
-import hashlib
-import re
-from typing import Any
+from ..common.ids import chunk_id as generate_chunk_id
+from ..common.ids import table_id as generate_table_id
+from ..common.naming import normalize_column_name, sanitize_table_name
+from ..common.text_rendering import table_to_text
 
+__all__ = [
+    "HEADER_ROW_MIN_FILL_RATIO",
+    "HEADER_ROW_TEXT_RATIO",
+    "generate_chunk_id",
+    "generate_table_id",
+    "is_numeric",
+    "normalize_column_name",
+    "parse_numeric",
+    "sanitize_table_name",
+    "table_to_text",
+]
 
 # Constants for header detection thresholds
 HEADER_ROW_MIN_FILL_RATIO = 0.5  # At least 50% of cells must be non-empty
 HEADER_ROW_TEXT_RATIO = 0.5  # At least 50% of non-empty cells should be text (not numbers)
-
-
-def generate_chunk_id(document_id: str, chunk_index: int) -> str:
-    """Generate a unique chunk ID from document ID and index."""
-    content = f"{document_id}:{chunk_index}"
-    return hashlib.sha256(content.encode()).hexdigest()[:16]
-
-
-def generate_table_id(document_id: str, page_number: int, columns: list[str]) -> str:
-    """Generate a unique table ID."""
-    content = f"{document_id}:{page_number}:{':'.join(columns)}"
-    return hashlib.sha256(content.encode()).hexdigest()[:16]
-
-
-def normalize_column_name(name: str, max_length: int = 50) -> str:
-    """
-    Normalize a column name to a valid SQL-safe identifier.
-    
-    Args:
-        name: Original column name
-        max_length: Maximum length for the normalized name
-        
-    Returns:
-        Normalized column name (lowercase, alphanumeric with underscores)
-    """
-    if not name:
-        return ""
-    
-    # Convert to lowercase, replace non-alphanumeric with underscore
-    normalized = re.sub(r'[^a-z0-9]+', '_', name.lower().strip())
-    normalized = normalized.strip('_')
-    
-    # Limit length
-    if len(normalized) > max_length:
-        normalized = normalized[:max_length]
-    
-    return normalized or ""
-
-
 def parse_numeric(value: str) -> float | None:
     """
     Try to parse a string as a number, handling common financial formats.
@@ -99,55 +72,3 @@ def parse_numeric(value: str) -> float | None:
 def is_numeric(value: str) -> bool:
     """Check if a value appears to be numeric."""
     return parse_numeric(value) is not None
-
-
-def table_to_text(columns: list[str], rows: list[dict], max_rows: int | None = None) -> str:
-    """
-    Convert a table (columns + rows) to readable text format.
-    
-    Args:
-        columns: List of column names
-        rows: List of row dictionaries
-        max_rows: Maximum rows to include (None for all)
-        
-    Returns:
-        Text representation of the table
-    """
-    lines = []
-    
-    # Header
-    lines.append(" | ".join(columns))
-    lines.append("-" * len(lines[0]))
-    
-    # Rows
-    display_rows = rows if max_rows is None else rows[:max_rows]
-    for row in display_rows:
-        row_values = [str(row.get(col, "") or "") for col in columns]
-        lines.append(" | ".join(row_values))
-    
-    if max_rows and len(rows) > max_rows:
-        lines.append(f"... ({len(rows) - max_rows} more rows)")
-    
-    return "\n".join(lines)
-
-
-def sanitize_table_name(name: str, max_length: int = 50) -> str:
-    """
-    Sanitize a name for use as SQL table name.
-    
-    Args:
-        name: Original name
-        max_length: Maximum length for the sanitized name
-        
-    Returns:
-        Sanitized table name
-    """
-    # Replace non-alphanumeric with underscore, lowercase
-    sanitized = re.sub(r'[^a-zA-Z0-9]+', '_', name.lower())
-    sanitized = sanitized.strip('_')
-    
-    # Ensure it doesn't start with a number
-    if sanitized and sanitized[0].isdigit():
-        sanitized = f"table_{sanitized}"
-    
-    return sanitized[:max_length] if sanitized else "unnamed_table"

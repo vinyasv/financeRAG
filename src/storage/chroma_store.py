@@ -1,12 +1,12 @@
 """ChromaDB storage for text embeddings and vector search."""
 
-from pathlib import Path
-import hashlib
 import os
 import threading
+from pathlib import Path
 
-from ..models import TextChunk
+from ..common.ids import chunk_id
 from ..config import config
+from ..models import TextChunk
 
 
 class ChromaStore:
@@ -72,7 +72,7 @@ class ChromaStore:
     
     def _get_embedding_function(self):
         """Get the embedding function based on config."""
-        from ..embeddings import get_embedding_provider, ChromaEmbeddingFunction
+        from ..embeddings import ChromaEmbeddingFunction, get_embedding_provider
         
         # Check if we should use OpenRouter or local
         if self.embedding_provider == "auto":
@@ -243,6 +243,4 @@ class ChromaStore:
     @staticmethod
     def generate_chunk_id(document_id: str, chunk_index: int) -> str:
         """Generate a unique chunk ID."""
-        content = f"{document_id}:{chunk_index}"
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
-
+        return chunk_id(document_id, chunk_index)

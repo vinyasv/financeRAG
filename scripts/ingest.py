@@ -1,52 +1,32 @@
 #!/usr/bin/env python3
 """CLI script for ingesting documents (PDFs and spreadsheets)."""
 
-import sys
-import asyncio
 import argparse
+import asyncio
 import logging
 from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import _bootstrap
 
-# Load .env first
-from src.config import config
-from src.rag_agent import RAGAgent
+from src.cli.common import configure_cli_logging, silence_third_party_loggers
 from src.llm_client import get_llm_client
-from src.security import validate_file_size, validate_path_safety
+from src.rag_agent import RAGAgent
 from src.ui import (
     console,
-    print_ingestion_summary,
-    print_error,
-    print_warning,
-    print_success,
-    print_info,
     create_progress,
+    print_error,
+    print_info,
+    print_ingestion_summary,
+    print_success,
+    print_warning,
 )
+from src.validation import SUPPORTED_INGEST_EXTENSIONS, validate_ingestion_file
 
-# Configure logging - write to data directory, not CWD
-log_dir = config.data_dir / "logs"
-log_dir.mkdir(parents=True, exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_dir / 'ingest.log'),
-    ]
-)
+configure_cli_logging("ingest.log")
 logger = logging.getLogger(__name__)
-
-# Silence noisy loggers  
-logging.getLogger('httpx').setLevel(logging.WARNING)
-logging.getLogger('chromadb').setLevel(logging.WARNING)
-
-# Supported file extensions
-SUPPORTED_EXTENSIONS = {'.pdf', '.xlsx', '.xls', '.csv'}
-
-# Maximum file size (500MB)
-MAX_FILE_SIZE_MB = 500
+silence_third_party_loggers()
+PROJECT_ROOT = _bootstrap.PROJECT_ROOT
+SUPPORTED_EXTENSIONS = SUPPORTED_INGEST_EXTENSIONS
 
 
 def validate_file_for_ingestion(file_path: Path) -> tuple[bool, str]:
@@ -56,25 +36,7 @@ def validate_file_for_ingestion(file_path: Path) -> tuple[bool, str]:
     Returns:
         Tuple of (is_valid, error_message)
     """
-    # Check extension
-    if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-        return False, f"Unsupported file type: {file_path.suffix}"
-    
-    # Check path safety (no traversal)
-    is_safe, error = validate_path_safety(str(file_path.name), SUPPORTED_EXTENSIONS)
-    if not is_safe:
-        return False, f"Path security issue: {error}"
-    
-    # Check file size
-    try:
-        size_bytes = file_path.stat().st_size
-        is_valid_size, error = validate_file_size(size_bytes, MAX_FILE_SIZE_MB)
-        if not is_valid_size:
-            return False, error
-    except OSError as e:
-        return False, f"Cannot read file: {e}"
-    
-    return True, ""
+    return validate_ingestion_file(file_path, allowed_extensions=SUPPORTED_EXTENSIONS)
 
 
 def parse_args():
@@ -187,7 +149,7 @@ async def main():
         console.print("  - PDF documents (.pdf)")
         console.print("  - Excel workbooks (.xlsx, .xls)")
         console.print("  - CSV files (.csv)")
-        sys.exit(1)
+        raise SystemExit(1)
     
     # Initialize LLM client
     llm_client = get_llm_client()
@@ -287,7 +249,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, asyncio.CancelledError):
         console.print("\n[yellow]Ingestion cancelled by user.[/yellow]")
-        sys.exit(0)
+        raise SystemExit(0)
     except Exception as e:
         console.print(f"\n[bold red]Fatal error during ingestion:[/bold red] {e}")
-        sys.exit(1)
+        raise SystemExit(1)

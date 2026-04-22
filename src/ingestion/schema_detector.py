@@ -5,7 +5,8 @@ import logging
 import re
 from typing import Any
 
-from ..models import ExtractedTable, ColumnType
+from ..common.text_rendering import table_to_text
+from ..models import ColumnType, ExtractedTable
 
 logger = logging.getLogger(__name__)
 
@@ -218,19 +219,9 @@ class SchemaDetector:
         table.rows = new_rows
         
         # Update raw_text with new column names
-        table.raw_text = self._table_to_text(new_columns, new_rows)
+        table.raw_text = table_to_text(new_columns, new_rows)
         
         return table
-    
-    def _table_to_text(self, columns: list[str], rows: list[dict]) -> str:
-        """Convert table to readable text format."""
-        lines = []
-        lines.append(" | ".join(columns))
-        lines.append("-" * len(lines[0]))
-        for row in rows:
-            row_values = [str(row.get(col, "")) for col in columns]
-            lines.append(" | ".join(row_values))
-        return "\n".join(lines)
     
     def _detect_with_heuristics(self, table: ExtractedTable) -> ExtractedTable:
         """Use heuristics to detect schema."""
@@ -332,4 +323,3 @@ async def detect_schemas_batch(
         enhanced.append(enhanced_table)
     
     return enhanced
-

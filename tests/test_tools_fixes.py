@@ -9,11 +9,10 @@ Tests coverage for:
 - LLM timeout in sql_query.py
 """
 
-import sys
-import tempfile
 import asyncio
+import sys
 from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -38,13 +37,13 @@ class TestToolsExports:
     
     def test_sql_exports(self):
         """SQLQueryTool and SQLExecutor should be exported."""
-        from src.tools import SQLQueryTool, SQLExecutor
+        from src.tools import SQLExecutor, SQLQueryTool
         assert SQLQueryTool is not None
         assert SQLExecutor is not None
     
     def test_vector_search_exports(self):
         """VectorSearchTool and MultiQuerySearch should be exported."""
-        from src.tools import VectorSearchTool, MultiQuerySearch
+        from src.tools import MultiQuerySearch, VectorSearchTool
         assert VectorSearchTool is not None
         assert MultiQuerySearch is not None
     
@@ -68,11 +67,10 @@ class TestToolsExports:
 class TestSQLQueryToolFixes:
     """Tests for SQL query tool exception handling and timeout."""
     
-    @pytest.mark.asyncio
-    async def test_security_error_returns_sanitized_message(self):
+    def test_security_error_returns_sanitized_message(self):
         """SecurityError should return a user-friendly message."""
-        from src.tools.sql_query import SQLQueryTool
         from src.storage.sqlite_store import SecurityError
+        from src.tools.sql_query import SQLQueryTool
         
         tool = SQLQueryTool()
         
@@ -84,15 +82,14 @@ class TestSQLQueryToolFixes:
             with patch.object(tool.sqlite_store, 'execute_query') as mock_exec:
                 mock_exec.side_effect = SecurityError("Forbidden keyword: DROP")
                 
-                result = await tool.execute("get all users")
+                result = asyncio.run(tool.execute("get all users"))
                 
                 assert "error" in result
                 assert "Query not allowed" in result["error"]
     
-    @pytest.mark.asyncio
-    async def test_llm_timeout_handling(self):
+    def test_llm_timeout_handling(self):
         """LLM calls should timeout and raise appropriate error."""
-        from src.tools.sql_query import SQLQueryTool, LLM_TIMEOUT_SECONDS
+        from src.tools.sql_query import LLM_TIMEOUT_SECONDS, SQLQueryTool
         
         # Create real async function that hangs
         async def slow_llm(*args, **kwargs):
@@ -108,7 +105,7 @@ class TestSQLQueryToolFixes:
         with patch.object(tool, 'schema_cluster_manager', None):
             with patch.object(tool.sqlite_store, 'get_schema_for_llm', return_value="schema"):
                 with pytest.raises(ValueError) as exc_info:
-                    await tool._generate_sql_with_llm("test query")
+                    asyncio.run(tool._generate_sql_with_llm("test query"))
                 
                 assert "timed out" in str(exc_info.value).lower()
 
@@ -118,8 +115,8 @@ class TestSQLExecutorFixes:
     
     def test_error_field_populated_on_failure(self):
         """SQLExecutor should populate error field on failure."""
-        from src.tools.sql_query import SQLExecutor
         from src.models import SQLQueryResult
+        from src.tools.sql_query import SQLExecutor
         
         executor = SQLExecutor()
         
@@ -137,6 +134,7 @@ class TestRerankerFixes:
     def test_cache_dir_uses_tempfile(self):
         """Cache directory should use tempfile, not hardcoded /tmp."""
         import inspect
+
         from src.tools.reranker import Reranker
         
         source = inspect.getsource(Reranker._ensure_model)
@@ -146,6 +144,7 @@ class TestRerankerFixes:
     def test_type_hints_use_textchunk(self):
         """Rerank methods should use TextChunk type hints."""
         import inspect
+
         from src.tools.reranker import Reranker
         
         # Check rerank method signature
@@ -184,48 +183,45 @@ class TestVectorSearchFixes:
 class TestGetDocumentFixes:
     """Tests for GetDocumentTool input validation."""
     
-    @pytest.mark.asyncio
-    async def test_empty_doc_id_rejected(self):
+    def test_empty_doc_id_rejected(self):
         """Empty document ID should be rejected."""
         from src.tools.get_document import GetDocumentTool
         
         tool = GetDocumentTool()
-        result = await tool.execute("")
+        result = asyncio.run(tool.execute(""))
         
         assert "error" in result
         assert "required" in result["error"].lower()
     
-    @pytest.mark.asyncio
-    async def test_invalid_doc_id_format_rejected(self):
+    def test_invalid_doc_id_format_rejected(self):
         """Document IDs with invalid characters should be rejected."""
         from src.tools.get_document import GetDocumentTool
         
         tool = GetDocumentTool()
         
         # Path traversal attempt
-        result = await tool.execute("../../../etc/passwd")
+        result = asyncio.run(tool.execute("../../../etc/passwd"))
         assert "error" in result
         assert "Invalid document ID" in result["error"]
         
         # SQL injection attempt
-        result = await tool.execute("doc'; DROP TABLE--")
+        result = asyncio.run(tool.execute("doc'; DROP TABLE--"))
         assert "error" in result
         assert "Invalid document ID" in result["error"]
     
-    @pytest.mark.asyncio
-    async def test_valid_doc_id_accepted(self):
+    def test_valid_doc_id_accepted(self):
         """Valid document IDs should be accepted."""
         from src.tools.get_document import GetDocumentTool
         
         tool = GetDocumentTool()
         
         # Valid hex hash
-        result = await tool.execute("abc123def456")
+        result = asyncio.run(tool.execute("abc123def456"))
         # Will return "not found" since it doesn't exist, but no validation error
         assert "error" not in result or "Invalid document ID" not in result.get("error", "")
         
         # Valid with underscores
-        result = await tool.execute("my_document_id")
+        result = asyncio.run(tool.execute("my_document_id"))
         assert "error" not in result or "Invalid document ID" not in result.get("error", "")
 
 

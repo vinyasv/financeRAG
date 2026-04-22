@@ -6,18 +6,18 @@ It converts PDF pages to images and sends them to a Vision Language Model
 to extract tabular data in structured JSON format.
 """
 
-import os
-import json
-import base64
 import asyncio
+import base64
+import json
 import logging
-import aiohttp
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Dict, List, Optional
+
+import aiohttp
 import fitz  # PyMuPDF
 
-from ..models import ExtractedTable
 from ..config import config
+from ..models import ExtractedTable
 
 logger = logging.getLogger(__name__)
 

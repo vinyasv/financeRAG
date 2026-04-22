@@ -1,17 +1,17 @@
 """Extract and structure tables from parsed PDFs."""
 
 from typing import Any
-import hashlib
 
-from ..models import ExtractedTable, ColumnType
+from ..common.ids import table_id
+from ..common.text_rendering import table_to_text
+from ..models import ExtractedTable
 from .pdf_parser import ParsedPDF
 from .utils import (
-    parse_numeric,
-    is_numeric,
-    normalize_column_name,
-    table_to_text,
     HEADER_ROW_MIN_FILL_RATIO,
     HEADER_ROW_TEXT_RATIO,
+    is_numeric,
+    normalize_column_name,
+    parse_numeric,
 )
 
 
@@ -99,14 +99,14 @@ class TableExtractor:
             return None
         
         # Generate table ID and name
-        table_id = self._generate_table_id(document_id, page_number, columns)
+        extracted_table_id = self._generate_table_id(document_id, page_number, columns)
         table_name = self._generate_table_name(columns, page_number)
         
         # Generate raw text representation
-        raw_text = self._table_to_text(columns, rows)
+        raw_text = table_to_text(columns, rows)
         
         return ExtractedTable(
-            id=table_id,
+            id=extracted_table_id,
             document_id=document_id,
             table_name=table_name,
             page_number=page_number,
@@ -156,8 +156,7 @@ class TableExtractor:
     
     def _generate_table_id(self, document_id: str, page_number: int, columns: list[str]) -> str:
         """Generate a unique table ID."""
-        content = f"{document_id}:{page_number}:{':'.join(columns)}"
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
+        return table_id(document_id, page_number, columns)
     
     def _generate_table_name(self, columns: list[str], page_number: int) -> str:
         """Generate a descriptive table name."""
@@ -185,7 +184,3 @@ class TableExtractor:
         
         return f"{table_type.capitalize()} with {row_count} rows. Columns: {col_names}"
     
-    def _table_to_text(self, columns: list[str], rows: list[dict]) -> str:
-        """Convert table to readable text format."""
-        return table_to_text(columns, rows)
-

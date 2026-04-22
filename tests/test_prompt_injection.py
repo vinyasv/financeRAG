@@ -8,12 +8,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.security import (
-    sanitize_user_input,
-    detect_injection_attempt,
-    wrap_user_content,
-    validate_path_safety,
-    validate_file_size,
     MAX_QUERY_LENGTH,
+    detect_injection_attempt,
+    sanitize_user_input,
+    validate_file_size,
+    validate_path_safety,
+    wrap_user_content,
 )
 
 
@@ -43,12 +43,12 @@ def test_sanitize_user_input():
     assert "\x00" not in result, "Null byte not removed"
     assert "\n" in result, "Newline should be preserved"
     assert "\t" in result, "Tab should be preserved"
-    print(f"  ✓ Control characters handled properly")
+    print("  ✓ Control characters handled properly")
     
     # Test 4: Empty input
     assert sanitize_user_input("") == "", "Empty input should return empty"
     assert sanitize_user_input(None) == "", "None should return empty"
-    print(f"  ✓ Empty input handled")
+    print("  ✓ Empty input handled")
     
     assert all_passed, "Some sanitization tests failed"
 
@@ -115,7 +115,7 @@ def test_wrap_user_content():
     assert "<user_query>" in wrapped, "Opening tag missing"
     assert "</user_query>" in wrapped, "Closing tag missing"
     assert content in wrapped, "Content missing"
-    print(f"  ✓ Content wrapped correctly:")
+    print("  ✓ Content wrapped correctly:")
     print(f"    {wrapped}")
     
     assert True  # All checks above passed
@@ -174,7 +174,7 @@ def test_file_size_validation():
     # Test within limit
     is_valid, error = validate_file_size(100 * 1024 * 1024, max_mb=500)  # 100MB
     assert is_valid, "100MB should be valid"
-    print(f"  ✓ 100MB within 500MB limit")
+    print("  ✓ 100MB within 500MB limit")
     
     # Test exceeding limit
     is_valid, error = validate_file_size(600 * 1024 * 1024, max_mb=500)  # 600MB

@@ -1,11 +1,10 @@
 """Embedding providers for Finance RAG."""
 
+import asyncio
 import os
 from abc import ABC, abstractmethod
-import asyncio
 
 from .config import config
-
 
 # OpenRouter embedding models
 OPENROUTER_EMBEDDING_MODELS = {
@@ -106,7 +105,7 @@ class OpenRouterEmbeddings(EmbeddingProvider):
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for a list of texts (sync wrapper)."""
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
             # We're in an async context - use nest_asyncio or run in thread
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -225,4 +224,3 @@ def get_embedding_provider(
         return LocalEmbeddings(model_name=model)
     
     raise ValueError(f"Unknown embedding provider: {provider}")
-

@@ -6,14 +6,14 @@ import re
 import time
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
-from ..models import ExecutionPlan, ToolCall, ToolResult, ToolName, CalculationTranscript
+from ..models import CalculationTranscript, ExecutionPlan, ToolCall, ToolName, ToolResult
 from ..tools.base import Tool
 from ..tools.calculator import CalculatorTool
+from ..tools.get_document import GetDocumentTool
 from ..tools.sql_query import SQLQueryTool
 from ..tools.vector_search import VectorSearchTool
-from ..tools.get_document import GetDocumentTool
+
+logger = logging.getLogger(__name__)
 
 
 class DAGExecutor:
@@ -66,45 +66,7 @@ class DAGExecutor:
         Returns:
             Dict mapping step IDs to their results
         """
-        results: dict[str, ToolResult] = {}
-        result_values: dict[str, Any] = {}  # Raw values for reference resolution
-        completed: set[str] = set()
-        
-        # Get execution layers (groups of steps that can run in parallel)
-        layers = plan.get_execution_layers()
-        
-        for layer in layers:
-            # Execute all steps in this layer in parallel
-            layer_tasks = [
-                self._execute_step(step, result_values)
-                for step in layer
-            ]
-            
-            layer_results = await asyncio.gather(*layer_tasks, return_exceptions=True)
-            
-            # Process results
-            for step, result in zip(layer, layer_results):
-                if isinstance(result, Exception):
-                    # Handle exceptions
-                    results[step.id] = ToolResult(
-                        step_id=step.id,
-                        tool=step.tool,
-                        success=False,
-                        result=None,
-                        error=str(result)
-                    )
-                    result_values[step.id] = None
-                else:
-                    results[step.id] = result
-                    # For CalculationTranscript, store the numeric result for reference resolution
-                    # This allows dependent steps to use {step_id} and get the computed number
-                    if isinstance(result.result, CalculationTranscript):
-                        result_values[step.id] = result.result.result
-                    else:
-                        result_values[step.id] = result.result
-                
-                completed.add(step.id)
-        
+        results, _ = await self._run_layers(plan)
         return results
     
     async def _execute_step(
@@ -129,6 +91,74 @@ class DAGExecutor:
         
         # Execute the tool
         return await tool.run(step.id, resolved_input, context)
+
+    async def _run_layers(
+        self,
+        plan: ExecutionPlan,
+        step_runner=None,
+        on_step_finished=None,
+        on_layer_finished=None,
+    ) -> tuple[dict[str, ToolResult], dict[str, Any]]:
+        """Execute plan layers and optionally emit callbacks for monitoring."""
+        results: dict[str, ToolResult] = {}
+        result_values: dict[str, Any] = {}
+        layers = plan.get_execution_layers()
+        runner = step_runner or self._execute_step
+
+        for layer_index, layer in enumerate(layers):
+            layer_start = time.perf_counter()
+            layer_tasks = [runner(step, result_values) for step in layer]
+            layer_outputs = await asyncio.gather(*layer_tasks, return_exceptions=True)
+            layer_elapsed = time.perf_counter() - layer_start
+
+            for step, raw_output in zip(layer, layer_outputs):
+                result, metadata = self._normalize_step_output(step, raw_output)
+                results[step.id] = result
+                self._store_result_value(result_values, step.id, result)
+
+                if on_step_finished:
+                    on_step_finished(step, result, metadata)
+
+            if on_layer_finished:
+                on_layer_finished(layer_index, layer, layer_elapsed)
+
+        return results, result_values
+
+    def _normalize_step_output(
+        self,
+        step: ToolCall,
+        raw_output: ToolResult | tuple[ToolResult, float] | Exception,
+    ) -> tuple[ToolResult, dict[str, Any]]:
+        """Normalize outputs returned by the step runner."""
+        if isinstance(raw_output, Exception):
+            return (
+                ToolResult(
+                    step_id=step.id,
+                    tool=step.tool,
+                    success=False,
+                    result=None,
+                    error=str(raw_output),
+                ),
+                {},
+            )
+
+        if isinstance(raw_output, tuple):
+            result, elapsed = raw_output
+            return result, {"elapsed_s": elapsed}
+
+        return raw_output, {}
+
+    def _store_result_value(
+        self,
+        result_values: dict[str, Any],
+        step_id: str,
+        result: ToolResult,
+    ) -> None:
+        """Store raw result values used for later reference resolution."""
+        if isinstance(result.result, CalculationTranscript):
+            result_values[step_id] = result.result.result
+        else:
+            result_values[step_id] = result.result
     
     def _resolve_references(self, input_str: str, context: dict[str, Any]) -> str:
         """
@@ -188,47 +218,38 @@ class ExecutionMonitor:
             Tuple of (results, timing_info)
         """
         start_time = time.perf_counter()
-        
-        results: dict[str, ToolResult] = {}
-        result_values: dict[str, Any] = {}
-        
-        layers = plan.get_execution_layers()
-        
-        for layer_idx, layer in enumerate(layers):
-            layer_start = time.perf_counter()
-            
-            # Execute layer
-            layer_tasks = [
-                self._timed_execute(executor, step, result_values)
-                for step in layer
-            ]
-            
-            layer_results = await asyncio.gather(*layer_tasks)
-            
-            layer_time = time.perf_counter() - layer_start
-            self.layer_timings.append(layer_time)
-            
-            # Process results
-            for step, (result, step_time) in zip(layer, layer_results):
-                self.step_timings[step.id] = step_time
-                results[step.id] = result
-                # For CalculationTranscript, store the numeric result for reference resolution
-                if isinstance(result.result, CalculationTranscript):
-                    result_values[step.id] = result.result.result
-                else:
-                    result_values[step.id] = result.result
-        
+
+        self.step_timings = {}
+        self.layer_timings = []
+
+        results, _ = await executor._run_layers(
+            plan,
+            step_runner=lambda step, context: self._timed_execute(executor, step, context),
+            on_step_finished=self._record_step_timing,
+            on_layer_finished=self._record_layer_timing,
+        )
+
         self.total_time = time.perf_counter() - start_time
         
         timing_info = {
             "total_time_ms": self.total_time * 1000,
             "layer_times_ms": [t * 1000 for t in self.layer_timings],
             "step_times_ms": {k: v * 1000 for k, v in self.step_timings.items()},
-            "layer_count": len(layers),
+            "layer_count": len(self.layer_timings),
             "step_count": len(plan.steps)
         }
         
         return results, timing_info
+
+    def _record_step_timing(self, step: ToolCall, _: ToolResult, metadata: dict[str, Any]) -> None:
+        """Record timing emitted by the executor step runner."""
+        elapsed = metadata.get("elapsed_s")
+        if elapsed is not None:
+            self.step_timings[step.id] = elapsed
+
+    def _record_layer_timing(self, _: int, __: list[ToolCall], elapsed_s: float) -> None:
+        """Record layer execution timing."""
+        self.layer_timings.append(elapsed_s)
     
     async def _timed_execute(
         self,
@@ -241,4 +262,3 @@ class ExecutionMonitor:
         result = await executor._execute_step(step, context)
         elapsed = time.perf_counter() - start
         return result, elapsed
-

@@ -1,9 +1,11 @@
 """Tests for the calculator tool."""
 
-import pytest
 import asyncio
+
+import pytest
+
+from src.models import CalculationTranscript
 from src.tools.calculator import CalculatorTool, calculate
-from src.models import CalculationTranscript, OperandBinding
 
 
 class TestCalculatorTool:

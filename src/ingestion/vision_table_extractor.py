@@ -17,8 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from ..models import ExtractedTable
-from ..config import config
-from .utils import parse_numeric, normalize_column_name, table_to_text
+from .utils import normalize_column_name, parse_numeric, table_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -49,15 +48,15 @@ class VisionTableExtractor:
         """Lazy import and initialize Docling with optimized settings."""
         if self._converter is None:
             try:
-                from docling.document_converter import DocumentConverter, PdfFormatOption
                 from docling.datamodel.base_models import InputFormat
                 from docling.datamodel.pipeline_options import (
-                    PdfPipelineOptions,
-                    AcceleratorOptions,
                     AcceleratorDevice,
+                    AcceleratorOptions,
+                    PdfPipelineOptions,
                     TableFormerMode,
-                    TableStructureOptions
+                    TableStructureOptions,
                 )
+                from docling.document_converter import DocumentConverter, PdfFormatOption
                 
                 # Speed optimizations
                 accelerator_options = AcceleratorOptions(

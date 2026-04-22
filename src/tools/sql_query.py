@@ -5,9 +5,9 @@ import logging
 import sqlite3
 from typing import Any
 
+from ..models import SQLQueryResult, ToolName
+from ..storage.sqlite_store import SecurityError, SQLiteStore
 from .base import Tool
-from ..models import ToolName, SQLQueryResult
-from ..storage.sqlite_store import SQLiteStore, SecurityError
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +116,7 @@ class SQLQueryTool(Tool):
             # Database errors - log but don't expose SQL details
             logger.warning(f"SQL execution error for query '{input_str[:50]}...': {e}")
             return {"error": "Query execution failed. Please try rephrasing your question."}
-        except Exception as e:
+        except Exception:
             # Unexpected errors - log and re-raise for debugging
             logger.exception(f"Unexpected error in SQL query tool for: {input_str[:50]}...")
             raise
@@ -199,7 +199,6 @@ class SQLQueryTool(Tool):
             matching_table = tables[0]
         
         table_name = matching_table['table_name']
-        columns = matching_table.get('columns', ['*'])
         
         # Return simple SELECT
         return f"SELECT * FROM \"{table_name}\" LIMIT 20"
@@ -246,7 +245,7 @@ class SQLExecutor:
                 error=f"Database error: {e}"
             )
         except Exception as e:
-            logger.exception(f"Unexpected error in SQLExecutor")
+            logger.exception("Unexpected error in SQLExecutor")
             return SQLQueryResult(
                 query=sql,
                 columns=[],
@@ -254,4 +253,3 @@ class SQLExecutor:
                 row_count=0,
                 error=f"Unexpected error: {e}"
             )
-

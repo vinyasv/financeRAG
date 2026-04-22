@@ -4,15 +4,14 @@ Rich-based terminal UI for Finance RAG.
 Claude Code-inspired design: minimal, clean, no emojis.
 """
 
+from typing import Any
+
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.status import Status
-from rich.text import Text
-from rich.style import Style
+from rich.table import Table
 from rich.theme import Theme
-from typing import Any
 
 # Custom theme - Claude Code inspired colors
 # Muted palette with blue/cyan accents
