@@ -122,11 +122,11 @@ def add_limit_clause(sql: str, max_rows: int = MAX_SQL_RESULT_ROWS) -> str:
 class SQLiteStore:
     """
     SQLite-based storage for structured data.
-    
+
     Stores:
     - Document metadata
-    - Extracted tables with flexible schema
-    - Table data as key-value pairs for query flexibility
+    - Extracted tables as native SQL tables (one table per extracted table)
+    - Schema clusters for scalable context management
     """
     
     def __init__(self, db_path: Path | None = None):
@@ -164,30 +164,9 @@ class SQLiteStore:
                 )
             """)
             
-            # Table data - flexible key-value storage
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS table_data (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    table_id TEXT NOT NULL,
-                    row_index INTEGER NOT NULL,
-                    column_name TEXT NOT NULL,
-                    value TEXT,
-                    numeric_value REAL,
-                    FOREIGN KEY (table_id) REFERENCES extracted_tables(id)
-                )
-            """)
-            
             # Create indexes for faster queries
             cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_table_data_table_id 
-                ON table_data(table_id)
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_table_data_column 
-                ON table_data(column_name)
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_extracted_tables_doc 
+                CREATE INDEX IF NOT EXISTS idx_extracted_tables_doc
                 ON extracted_tables(document_id)
             """)
             
@@ -532,49 +511,6 @@ class SQLiteStore:
                 }
                 for row in cursor.fetchall()
             ]
-    
-    def get_table(self, table_id: str) -> ExtractedTable | None:
-        """Get a table by ID with all its data."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Get table metadata
-            cursor.execute("SELECT * FROM extracted_tables WHERE id = ?", (table_id,))
-            row = cursor.fetchone()
-            
-            if not row:
-                return None
-            
-            # Get table data
-            cursor.execute("""
-                SELECT row_index, column_name, value, numeric_value
-                FROM table_data
-                WHERE table_id = ?
-                ORDER BY row_index, column_name
-            """, (table_id,))
-            
-            # Reconstruct rows
-            rows: dict[int, dict[str, Any]] = {}
-            for data_row in cursor.fetchall():
-                row_idx = data_row["row_index"]
-                if row_idx not in rows:
-                    rows[row_idx] = {}
-                
-                col_name = data_row["column_name"]
-                # Use numeric value if available, otherwise string value
-                value = data_row["numeric_value"] if data_row["numeric_value"] is not None else data_row["value"]
-                rows[row_idx][col_name] = value
-            
-            return ExtractedTable(
-                id=row["id"],
-                document_id=row["document_id"],
-                table_name=row["table_name"],
-                page_number=row["page_number"],
-                schema_description=row["schema_description"],
-                columns=json.loads(row["columns"]),
-                rows=[rows[i] for i in sorted(rows.keys())],
-                raw_text=row["raw_text"]
-            )
     
     def list_tables(self, document_id: str | None = None) -> list[TableSchema]:
         """List all tables, optionally filtered by document."""

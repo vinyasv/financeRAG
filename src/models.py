@@ -139,13 +139,6 @@ class ExtractedTable(BaseModel):
     raw_text: str | None = Field(default=None, description="Original text representation")
 
 
-class TableDataRow(BaseModel):
-    """A single row of data in a table."""
-    table_id: str = Field(..., description="Parent table ID")
-    row_index: int = Field(..., description="Row number")
-    data: dict[str, Any] = Field(default_factory=dict, description="Column name -> value")
-
-
 # =============================================================================
 # Query/Response Models
 # =============================================================================
