@@ -16,13 +16,8 @@ tests/test_executor.py. No pytest-asyncio.
 """
 
 import asyncio
-import sys
-from pathlib import Path
 from typing import Any
-
-# Add repo root to path so `import src...` works when pytest is invoked
-# from anywhere.
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from unittest.mock import AsyncMock
 
 from src.agent.executor import DAGExecutor
 from src.models import (
@@ -31,7 +26,9 @@ from src.models import (
     ToolCall,
     ToolName,
 )
+from src.storage.sqlite_store import SQLiteStore
 from src.tools.base import Tool
+from src.tools.sql_query import SQLQueryTool
 
 
 class _StubTool(Tool):
@@ -109,22 +106,19 @@ def test_calculator_bindings_populated_from_sql_scalar():
     assert isinstance(transcript, CalculationTranscript)
     assert transcript.result == 200.0
 
-    # The headline assertion: bindings are populated and traceable.
-    assert transcript.bindings, "Calculator transcript bindings must not be empty"
-    assert any(
-        b.source_step == "step_1" for b in transcript.bindings
-    ), f"At least one binding must reference step_1; got {transcript.bindings!r}"
+    # The headline assertion: bindings are populated and traceable. We pin the
+    # full shape so a regression that broke OperandBinding fields (e.g. always
+    # zero resolved_value) gets caught instead of a vacuous source_step pass.
+    assert len(transcript.bindings) == 1
+    binding = transcript.bindings[0]
+    assert binding.source_step == "step_1"
+    assert binding.reference == "{step_1.value}"
+    assert binding.resolved_value == 100.0
 
-    # And the executor must have handed the calculator the RAW expression
-    # (with the {step_1.value} placeholder still intact) so its own resolver
-    # could capture provenance. If the executor pre-substituted it, the
-    # calculator's bindings would have been empty.
-    # The first .calls entry is the run() invocation.
-    cal_run_call = results["step_2"].result  # already verified above
-    # Re-verify by checking the resolved expression contains the substituted
-    # numeric value (proof the calculator did the substitution itself).
-    assert "100" in transcript.resolved_expression
+    # The calculator must have done the substitution itself (proof that the
+    # executor passed RAW {step_1.value} through without pre-substituting).
     assert transcript.original_expression == "{step_1.value} * 2"
+    assert "100" in transcript.resolved_expression
 
 
 def test_calculator_fails_loudly_on_unresolved_reference():
@@ -132,10 +126,9 @@ def test_calculator_fails_loudly_on_unresolved_reference():
     references a field that does not exist on it, the calculator step must
     surface a clear failure rather than silently producing 0.
 
-    This guards fix #3 (executor.py:_resolve_references hard-fail) AND fix
-    #1 (the calculator path bypasses _resolve_references) -- because the
-    calculator's own resolver also raises on missing fields, the failure
-    surfaces either way.
+    This is a regression guard for the calculator's own resolver. The path
+    where the *executor's* `_resolve_references` raises on None is covered
+    separately in test_executor_raises_on_none_reference_for_non_calculator_tool.
     """
     sql_stub = _StubTool(
         ToolName.SQL_QUERY,
@@ -176,7 +169,75 @@ def test_calculator_fails_loudly_on_unresolved_reference():
         "step_1" in error_text
         or "none" in error_text
         or "resolved to none" in error_text
+        or "not found" in error_text
     ), f"Error must mention the failed reference; got: {results['step_2'].error!r}"
+
+
+def test_executor_raises_on_none_reference_for_non_calculator_tool():
+    """Targeted regression for the executor's own _resolve_references: when a
+    non-calculator tool's input references a step field that resolves to None,
+    the executor must raise ValueError (caught by Tool.run as success=False)
+    instead of silently substituting "0".
+
+    This is the path that the *executor* fix patches (calculator steps bypass
+    _resolve_references entirely per fix #1, so they cannot exercise this code
+    path). Without this test, fix #3 has no coverage in the executor itself.
+    """
+    sql_stub = _StubTool(
+        ToolName.SQL_QUERY,
+        # 1x1 with NULL value -- new shape from fix #2.
+        return_value={"value": None, "column": "missing_total"},
+    )
+    vector_stub = _StubTool(
+        ToolName.VECTOR_SEARCH,
+        return_value=[{"content": "stub", "score": 0.5}],
+    )
+
+    executor = DAGExecutor(sql_query=sql_stub, vector_search=vector_stub)
+
+    plan = _build_plan(
+        query="search for a missing number",
+        steps=[
+            ToolCall(
+                id="step_1",
+                tool=ToolName.SQL_QUERY,
+                input="get missing total",
+                depends_on=[],
+                description="fetch missing total",
+            ),
+            ToolCall(
+                id="step_2",
+                tool=ToolName.VECTOR_SEARCH,
+                input="search for amount {step_1.value}",
+                depends_on=["step_1"],
+                description="search using missing value",
+            ),
+        ],
+    )
+
+    results = asyncio.run(executor.execute(plan))
+
+    assert results["step_1"].success
+    assert results["step_2"].success is False, (
+        "Non-calculator tool with a None-resolving reference must NOT silently "
+        "execute with a fabricated '0' substituted in its input"
+    )
+    assert results["step_2"].error is not None
+    error_text = results["step_2"].error.lower()
+    assert "resolved to none" in error_text or "none" in error_text, (
+        f"Error must come from the executor's None-reference guard; "
+        f"got: {results['step_2'].error!r}"
+    )
+
+    # And the vector_search tool must NOT have been invoked at all -- the
+    # exception fires before .run() reaches .execute().
+    execute_calls = [
+        c for (step_id, c) in vector_stub.calls if step_id == "__execute__"
+    ]
+    assert not execute_calls, (
+        "vector_search.execute() must not have been called; got "
+        f"{execute_calls!r}"
+    )
 
 
 def test_executor_resolves_references_for_non_calculator_steps():
@@ -230,3 +291,28 @@ def test_executor_resolves_references_for_non_calculator_steps():
         "Executor must substitute references for non-calculator tools; "
         f"got {run_inputs[0]!r}"
     )
+
+
+def test_sql_query_tool_returns_dict_shape_for_1x1_result(tmp_path, monkeypatch):
+    """Targeted regression for fix #2 against the REAL SQLQueryTool.
+
+    Previously a 1x1 result returned a bare scalar; now it must return
+    {"value": <scalar>, "column": <colname>} so downstream {step.value}
+    references resolve correctly. This guards against someone reverting
+    src/tools/sql_query.py:99-104 to the old scalar shortcut -- the stub-based
+    test above could not catch that.
+    """
+    store = SQLiteStore(db_path=tmp_path / "scalar.db")
+    tool = SQLQueryTool(sqlite_store=store)
+
+    # Bypass NL->SQL generation by pinning the SQL the tool will execute.
+    monkeypatch.setattr(
+        tool, "_generate_sql", AsyncMock(return_value="SELECT 100 AS revenue")
+    )
+
+    result = asyncio.run(tool.execute("get the revenue"))
+
+    assert isinstance(result, dict), (
+        f"1x1 SQL result must be a dict, not a bare scalar; got {type(result).__name__}: {result!r}"
+    )
+    assert result == {"value": 100, "column": "revenue"}
