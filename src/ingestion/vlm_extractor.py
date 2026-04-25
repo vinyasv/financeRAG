@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 import aiohttp
 import fitz  # PyMuPDF
 
+from ..common.naming import sanitize_table_name
 from ..config import config
 from ..models import ExtractedTable
 
@@ -216,10 +217,14 @@ class VLMTableExtractor:
                     row_vals = [str(row.get(c, '')) for c in columns]
                     raw_text += f"| {' | '.join(row_vals)} |\n"
                 
+                # Sanitize at the extractor boundary so downstream
+                # validate_identifier (called from save_table) cannot
+                # be tripped by free-form VLM names like "Q1 FY26 Revenue".
+                safe_name = sanitize_table_name(name)
                 table = ExtractedTable(
                     id=table_id,
                     document_id=document_id,
-                    table_name=name,
+                    table_name=safe_name,
                     page_number=page_number,
                     schema_description=desc,
                     columns=columns,

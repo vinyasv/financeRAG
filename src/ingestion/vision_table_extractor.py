@@ -16,6 +16,7 @@ import multiprocessing
 from pathlib import Path
 from typing import Any
 
+from ..common.naming import sanitize_table_name
 from ..models import ExtractedTable
 from .utils import normalize_column_name, parse_numeric, table_to_text
 
@@ -229,17 +230,22 @@ class VisionTableExtractor:
         
         # Generate table name
         table_name = f"table_p{page_number}_{self._generate_table_name(columns)}"
-        
+
+        # Sanitize at the extractor boundary for symmetry with the VLM
+        # extractor and to guarantee downstream validate_identifier cannot
+        # be tripped by free-form names that slipped through.
+        safe_name = sanitize_table_name(table_name[:50])
+
         # Build raw text representation
         raw_text = table_to_text(columns, rows, max_rows=20)
-        
+
         # Generate description
         description = self._generate_description(columns, rows)
-        
+
         return ExtractedTable(
             id=table_id,
             document_id=document_id,
-            table_name=table_name[:50],
+            table_name=safe_name,
             page_number=page_number,
             schema_description=description,
             columns=columns,
