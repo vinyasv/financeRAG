@@ -343,13 +343,13 @@ class TestTableNamingFixes:
 
     def test_make_unique_table_name_uses_doc_id_prefix(self, tmp_path):
         """Direct unit test for _make_unique_table_name: the prefix is
-        the first 12 chars of the doc_id, not a filename slug."""
+        ``t_`` plus the first 12 chars of the doc_id, not a filename slug.
+        The ``t_`` prefix guarantees a letter-starting identifier even when
+        the SHA-derived doc_id begins with a digit."""
         store = SQLiteStore(db_path=tmp_path / "unit.db")
-        # Letter-starting doc_id so validate_identifier is satisfied if
-        # this name flows into save_table later.
         doc_id = "abcdef1234567890"
         result = store._make_unique_table_name("revenue", doc_id)
-        assert result == "abcdef123456_revenue"
+        assert result == "t_abcdef123456_revenue"
         # And independent of any document existing in the store.
         assert store.get_document(doc_id) is None
 

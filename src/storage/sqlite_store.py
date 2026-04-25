@@ -361,9 +361,11 @@ class SQLiteStore:
         Returns:
             Unique table name (max 63 chars, alphanumeric + underscore)
         """
-        # doc_id is already a SHA-derived alphanumeric string from common.ids
+        # doc_id is a SHA-derived alphanumeric string from common.ids that may
+        # start with a digit; prefix with "t_" so the identifier always begins
+        # with a letter (validate_identifier requires ^[a-zA-Z_]).
         safe_doc = doc_id[:12]
-        return f"{safe_doc}_{table_name}"[:63]
+        return f"t_{safe_doc}_{table_name}"[:63]
     
     def _parse_numeric(self, value: Any) -> float | None:
         """
