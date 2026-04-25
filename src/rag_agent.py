@@ -200,7 +200,13 @@ class RAGAgent:
         return tables
 
     async def _process_pdf_tables(self, tables: list[ExtractedTable], source_document: str) -> None:
-        """Enhance, persist, and cluster extracted PDF tables."""
+        """Enhance, persist, and cluster extracted PDF tables.
+
+        Uses ``asyncio.gather(..., return_exceptions=True)`` so that a single
+        bad table (e.g. invalid identifier, schema enhancement failure, or
+        clustering crash) does not abort the rest of the batch. Each failure
+        is logged with full traceback context and processing continues.
+        """
         logger.info(f"Processing {len(tables)} tables concurrently...")
         semaphore = asyncio.Semaphore(10)
 
@@ -222,7 +228,15 @@ class RAGAgent:
                     source_document=source_document,
                 )
 
-        await asyncio.gather(*[process_table(table) for table in tables])
+        tasks = [process_table(table) for table in tables]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for table, result in zip(tables, results):
+            if isinstance(result, BaseException):
+                logger.exception(
+                    "Table %s failed during ingestion",
+                    table.id,
+                    exc_info=result,
+                )
 
     async def _save_spreadsheet_table(
         self,
