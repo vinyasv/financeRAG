@@ -194,8 +194,11 @@ class DAGExecutor:
             if value is not None:
                 return str(value)
             else:
-                logger.warning(f"Reference resolution: {ref} resolved to None, using '0'")
-                return "0"
+                # Fail loudly: silently substituting "0" produces fabricated
+                # numbers in downstream calculations and breaks the audit
+                # contract. The Tool.run wrapper catches this and turns it
+                # into a structured ToolResult(success=False, error=...).
+                raise ValueError(f"Reference {ref} resolved to None")
         
         return re.sub(r'\{([^}]+)\}', replace_ref, input_str)
 
