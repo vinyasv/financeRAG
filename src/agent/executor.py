@@ -76,7 +76,7 @@ class DAGExecutor:
     ) -> ToolResult:
         """Execute a single step."""
         tool = self.tools.get(step.tool)
-        
+
         if not tool:
             return ToolResult(
                 step_id=step.id,
@@ -85,10 +85,16 @@ class DAGExecutor:
                 result=None,
                 error=f"Unknown tool: {step.tool}"
             )
-        
-        # Resolve references in input
-        resolved_input = self._resolve_references(step.input, context)
-        
+
+        # The calculator has its own reference resolver that captures operand
+        # bindings (provenance) for the audit transcript. Pre-substituting
+        # references here would erase those bindings, so pass raw input through
+        # for calculator steps and let it resolve references itself.
+        if step.tool == ToolName.CALCULATOR:
+            resolved_input = step.input
+        else:
+            resolved_input = self._resolve_references(step.input, context)
+
         # Execute the tool
         return await tool.run(step.id, resolved_input, context)
 
