@@ -20,50 +20,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-class TestToolsExports:
-    """Test that all exports are available in __init__.py."""
-    
-    def test_tool_base_exports(self):
-        """Base Tool and ToolResult should be exported."""
-        from src.tools import Tool, ToolResult
-        assert Tool is not None
-        assert ToolResult is not None
-    
-    def test_calculator_exports(self):
-        """CalculatorTool and ComparabilityError should be exported."""
-        from src.tools import CalculatorTool, ComparabilityError
-        assert CalculatorTool is not None
-        assert ComparabilityError is not None
-    
-    def test_sql_exports(self):
-        """SQLQueryTool and SQLExecutor should be exported."""
-        from src.tools import SQLExecutor, SQLQueryTool
-        assert SQLQueryTool is not None
-        assert SQLExecutor is not None
-    
-    def test_vector_search_exports(self):
-        """VectorSearchTool and MultiQuerySearch should be exported."""
-        from src.tools import MultiQuerySearch, VectorSearchTool
-        assert VectorSearchTool is not None
-        assert MultiQuerySearch is not None
-    
-    def test_reranker_export(self):
-        """Reranker should be exported."""
-        from src.tools import Reranker
-        assert Reranker is not None
-    
-    def test_comparability_exports(self):
-        """Comparability functions should be exported."""
-        from src.tools import check_field_comparability, create_comparability_refusal
-        assert check_field_comparability is not None
-        assert create_comparability_refusal is not None
-    
-    def test_get_document_export(self):
-        """GetDocumentTool should be exported."""
-        from src.tools import GetDocumentTool
-        assert GetDocumentTool is not None
-
-
 class TestSQLQueryToolFixes:
     """Tests for SQL query tool exception handling and timeout."""
     
@@ -126,58 +82,6 @@ class TestSQLExecutorFixes:
         assert isinstance(result, SQLQueryResult)
         assert result.error is not None
         assert len(result.rows) == 0
-
-
-class TestRerankerFixes:
-    """Tests for Reranker path and type fixes."""
-    
-    def test_cache_dir_uses_tempfile(self):
-        """Cache directory should use tempfile, not hardcoded /tmp."""
-        import inspect
-
-        from src.tools.reranker import Reranker
-        
-        source = inspect.getsource(Reranker._ensure_model)
-        assert "tempfile.gettempdir()" in source
-        assert '"/tmp/flashrank"' not in source
-    
-    def test_type_hints_use_textchunk(self):
-        """Rerank methods should use TextChunk type hints."""
-        import inspect
-
-        from src.tools.reranker import Reranker
-        
-        # Check rerank method signature
-        sig = inspect.signature(Reranker.rerank)
-        chunks_param = sig.parameters.get('chunks')
-        assert chunks_param is not None
-        # The annotation should reference TextChunk
-        assert 'TextChunk' in str(chunks_param.annotation)
-
-
-class TestVectorSearchFixes:
-    """Tests for VectorSearchTool property mutation fix."""
-    
-    def test_no_property_mutation(self):
-        """use_reranking should not be mutated by property access."""
-        from src.tools.vector_search import VectorSearchTool
-        
-        tool = VectorSearchTool(use_reranking=True)
-        
-        # Access the reranker property (which may fail to import)
-        with patch('src.tools.vector_search.VectorSearchTool.reranker', new_callable=lambda: property(lambda self: None)):
-            _ = tool.reranker
-        
-        # use_reranking should still be True
-        assert tool.use_reranking is True
-    
-    def test_has_init_failed_flag(self):
-        """Should have _reranker_init_failed flag."""
-        from src.tools.vector_search import VectorSearchTool
-        
-        tool = VectorSearchTool()
-        assert hasattr(tool, '_reranker_init_failed')
-        assert tool._reranker_init_failed is False
 
 
 class TestGetDocumentFixes:

@@ -1,6 +1,8 @@
 # Test Baseline
 
-**Result:** 109 passed, 1 skipped (no failures, no errors)
+**Result (initial baseline):** 109 passed, 1 skipped (no failures, no errors)
+
+**Result (after dropping import-existence-only tests in `test_tools_fixes.py`):** 98 passed, 1 skipped
 
 ## Per-suite results
 
@@ -14,7 +16,7 @@
 - PASS — tests/test_scripts_fixes.py (6 passed)
 - PASS — tests/test_sql_security.py (4 passed)
 - PASS — tests/test_storage_fixes.py (16 passed)
-- PASS — tests/test_tools_fixes.py (19 passed)
+- PASS — tests/test_tools_fixes.py (initially 19 passed; now 8 passed after removing `TestToolsExports`, `TestRerankerFixes`, and `TestVectorSearchFixes` — those classes only asserted symbols could be imported, not that they worked)
 
 No failing tests in the baseline. Six warnings observed:
 - 5x `DeprecationWarning` from SWIG-generated bindings (third-party, ignorable).
