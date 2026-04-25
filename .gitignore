@@ -29,6 +29,9 @@ data/
 results*.csv
 report*.pdf
 
+# Allow checked-in test fixtures (must come after the *.pdf rules above)
+!tests/fixtures/*.pdf
+
 # IDE
 .idea/
 .vscode/
