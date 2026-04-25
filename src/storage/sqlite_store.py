@@ -346,21 +346,24 @@ class SQLiteStore:
     def _make_unique_table_name(self, table_name: str, doc_id: str) -> str:
         """
         Create a unique, SQL-safe table name with document context.
-        
+
+        Uses the document ID (a SHA-derived alphanumeric string from
+        ``common.ids``) as the prefix instead of a filename slug. Filename
+        slugs collide for closely-named files (e.g. ``nvidia_q1_2024.pdf``
+        and ``nvidia_q1_2025.pdf`` both reduced to ``nvidiaq120``), causing
+        later tables to silently overwrite earlier ones. Document IDs are
+        collision-free per ingestion.
+
         Args:
-            table_name: Base table name
-            doc_id: Document ID for prefix
-            
+            table_name: Base table name (already sanitized upstream)
+            doc_id: Document ID — SHA-derived alphanumeric prefix
+
         Returns:
-            Sanitized table name (max 63 chars, alphanumeric + underscore)
+            Unique table name (max 63 chars, alphanumeric + underscore)
         """
-        # Get document info for context
-        doc = self.get_document(doc_id)
-        if doc:
-            # Use first 10 chars of sanitized filename
-            doc_prefix = re.sub(r'[^a-z0-9]', '', doc.filename.lower().replace('.pdf', '').replace('.xlsx', '').replace('.csv', ''))[:10]
-            return f"{doc_prefix}_{table_name}"[:63]  # SQLite max identifier length
-        return f"{doc_id[:8]}_{table_name}"[:63]
+        # doc_id is already a SHA-derived alphanumeric string from common.ids
+        safe_doc = doc_id[:12]
+        return f"{safe_doc}_{table_name}"[:63]
     
     def _parse_numeric(self, value: Any) -> float | None:
         """
