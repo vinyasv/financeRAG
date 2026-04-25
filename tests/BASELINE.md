@@ -4,6 +4,8 @@
 
 **Result (after dropping import-existence-only tests in `test_tools_fixes.py`):** 98 passed, 1 skipped
 
+**Result (after adding `tests/test_smoke.py`):** 99 passed, 1 skipped — smoke test passes today (no `xfail` needed).
+
 ## Per-suite results
 
 - PASS — tests/test_calculator.py (17 passed)
@@ -17,6 +19,7 @@
 - PASS — tests/test_sql_security.py (4 passed)
 - PASS — tests/test_storage_fixes.py (16 passed)
 - PASS — tests/test_tools_fixes.py (initially 19 passed; now 8 passed after removing `TestToolsExports`, `TestRerankerFixes`, and `TestVectorSearchFixes` — those classes only asserted symbols could be imported, not that they worked)
+- PASS — tests/test_smoke.py (1 passed) — added in step 5; ingests `tests/fixtures/sample.pdf` and runs an end-to-end query against `MockLLMClient` with `EMBEDDING_PROVIDER=local`
 
 No failing tests in the baseline. Six warnings observed:
 - 5x `DeprecationWarning` from SWIG-generated bindings (third-party, ignorable).
