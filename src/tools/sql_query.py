@@ -95,10 +95,14 @@ class SQLQueryTool(Tool):
             
             columns = list(rows[0].keys()) if rows else []
             
-            # If single row with single column, return just the value
+            # If single row with single column, return a dict so downstream
+            # references like {step_id.value} resolve against a real field.
+            # Returning a bare scalar here historically broke calculator
+            # bindings because the executor/calculator could not navigate
+            # into a non-dict context value.
             if len(rows) == 1 and len(columns) == 1:
-                return rows[0][columns[0]]
-            
+                return {"value": rows[0][columns[0]], "column": columns[0]}
+
             # If single row, return as flat dict
             if len(rows) == 1:
                 return rows[0]
