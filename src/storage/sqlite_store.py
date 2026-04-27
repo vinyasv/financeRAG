@@ -1,5 +1,6 @@
 """SQLite storage for structured data (extracted tables)."""
 
+import hashlib
 import json
 import logging
 import re
@@ -122,11 +123,11 @@ def add_limit_clause(sql: str, max_rows: int = MAX_SQL_RESULT_ROWS) -> str:
 class SQLiteStore:
     """
     SQLite-based storage for structured data.
-    
+
     Stores:
     - Document metadata
-    - Extracted tables with flexible schema
-    - Table data as key-value pairs for query flexibility
+    - Extracted tables as native SQL tables (one table per extracted table)
+    - Schema clusters for scalable context management
     """
     
     def __init__(self, db_path: Path | None = None):
@@ -164,30 +165,9 @@ class SQLiteStore:
                 )
             """)
             
-            # Table data - flexible key-value storage
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS table_data (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    table_id TEXT NOT NULL,
-                    row_index INTEGER NOT NULL,
-                    column_name TEXT NOT NULL,
-                    value TEXT,
-                    numeric_value REAL,
-                    FOREIGN KEY (table_id) REFERENCES extracted_tables(id)
-                )
-            """)
-            
             # Create indexes for faster queries
             cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_table_data_table_id 
-                ON table_data(table_id)
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_table_data_column 
-                ON table_data(column_name)
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_extracted_tables_doc 
+                CREATE INDEX IF NOT EXISTS idx_extracted_tables_doc
                 ON extracted_tables(document_id)
             """)
             
@@ -332,7 +312,11 @@ class SQLiteStore:
                 df.columns = [self._sanitize_column_name(c) for c in df.columns]
                 
                 # Create unique table name (include doc context to avoid collisions)
-                native_table_name = self._make_unique_table_name(table.table_name, table.document_id)
+                native_table_name = self._make_unique_table_name(
+                    table.table_name,
+                    table.document_id,
+                    table.id,
+                )
                 
                 # Validate table name before DDL
                 validate_identifier(native_table_name)
@@ -364,24 +348,38 @@ class SQLiteStore:
             
             conn.commit()
     
-    def _make_unique_table_name(self, table_name: str, doc_id: str) -> str:
+    def _make_unique_table_name(
+        self,
+        table_name: str,
+        doc_id: str,
+        table_id: str | None = None,
+    ) -> str:
         """
         Create a unique, SQL-safe table name with document context.
-        
+
+        Uses the document ID (a SHA-derived alphanumeric string from
+        ``common.ids``) as the prefix instead of a filename slug, plus a
+        deterministic hash suffix to preserve uniqueness after SQLite's
+        63-character identifier limit is applied.
+
         Args:
-            table_name: Base table name
-            doc_id: Document ID for prefix
-            
+            table_name: Base table name (already sanitized upstream)
+            doc_id: Document ID — SHA-derived alphanumeric prefix
+            table_id: Optional extracted-table ID for same-document uniqueness
+
         Returns:
-            Sanitized table name (max 63 chars, alphanumeric + underscore)
+            Unique table name (max 63 chars, alphanumeric + underscore)
         """
-        # Get document info for context
-        doc = self.get_document(doc_id)
-        if doc:
-            # Use first 10 chars of sanitized filename
-            doc_prefix = re.sub(r'[^a-z0-9]', '', doc.filename.lower().replace('.pdf', '').replace('.xlsx', '').replace('.csv', ''))[:10]
-            return f"{doc_prefix}_{table_name}"[:63]  # SQLite max identifier length
-        return f"{doc_id[:8]}_{table_name}"[:63]
+        # doc_id is a SHA-derived alphanumeric string from common.ids that may
+        # start with a digit; prefix with "t_" so the identifier always begins
+        # with a letter (validate_identifier requires ^[a-zA-Z_]).
+        safe_doc = doc_id[:12]
+        unique_key = table_id or f"{doc_id}:{table_name}"
+        suffix = hashlib.sha256(unique_key.encode()).hexdigest()[:8]
+        prefix = f"t_{safe_doc}_"
+        suffix_part = f"_{suffix}"
+        max_table_len = 63 - len(prefix) - len(suffix_part)
+        return f"{prefix}{table_name[:max_table_len]}{suffix_part}"
     
     def _parse_numeric(self, value: Any) -> float | None:
         """
@@ -532,49 +530,6 @@ class SQLiteStore:
                 }
                 for row in cursor.fetchall()
             ]
-    
-    def get_table(self, table_id: str) -> ExtractedTable | None:
-        """Get a table by ID with all its data."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Get table metadata
-            cursor.execute("SELECT * FROM extracted_tables WHERE id = ?", (table_id,))
-            row = cursor.fetchone()
-            
-            if not row:
-                return None
-            
-            # Get table data
-            cursor.execute("""
-                SELECT row_index, column_name, value, numeric_value
-                FROM table_data
-                WHERE table_id = ?
-                ORDER BY row_index, column_name
-            """, (table_id,))
-            
-            # Reconstruct rows
-            rows: dict[int, dict[str, Any]] = {}
-            for data_row in cursor.fetchall():
-                row_idx = data_row["row_index"]
-                if row_idx not in rows:
-                    rows[row_idx] = {}
-                
-                col_name = data_row["column_name"]
-                # Use numeric value if available, otherwise string value
-                value = data_row["numeric_value"] if data_row["numeric_value"] is not None else data_row["value"]
-                rows[row_idx][col_name] = value
-            
-            return ExtractedTable(
-                id=row["id"],
-                document_id=row["document_id"],
-                table_name=row["table_name"],
-                page_number=row["page_number"],
-                schema_description=row["schema_description"],
-                columns=json.loads(row["columns"]),
-                rows=[rows[i] for i in sorted(rows.keys())],
-                raw_text=row["raw_text"]
-            )
     
     def list_tables(self, document_id: str | None = None) -> list[TableSchema]:
         """List all tables, optionally filtered by document."""
@@ -805,4 +760,3 @@ class SQLiteStore:
             cursor.execute("DELETE FROM schema_clusters")
             conn.commit()
             logger.info("Cleared all schema clusters")
-

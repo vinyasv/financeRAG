@@ -3,6 +3,7 @@
 from typing import Any
 
 from ..common.ids import table_id
+from ..common.naming import sanitize_table_name
 from ..common.text_rendering import table_to_text
 from ..models import ExtractedTable
 from .pdf_parser import ParsedPDF
@@ -159,10 +160,16 @@ class TableExtractor:
         return table_id(document_id, page_number, columns)
     
     def _generate_table_name(self, columns: list[str], page_number: int) -> str:
-        """Generate a descriptive table name."""
-        # Use first few column names
+        """Generate a descriptive table name.
+
+        Columns are already normalized by ``_normalize_header`` upstream so
+        the returned name is SQL-safe in practice. Re-applying
+        ``sanitize_table_name`` here is defensive parity with the VLM and
+        Docling extractors -- it costs nothing and protects against any
+        future change to the upstream normalization.
+        """
         col_hint = "_".join(columns[:3])
-        return f"table_p{page_number}_{col_hint}"[:50]
+        return sanitize_table_name(f"table_p{page_number}_{col_hint}")
     
     def _infer_schema_description(self, columns: list[str], rows: list[dict]) -> str:
         """Infer a description of what the table contains."""
