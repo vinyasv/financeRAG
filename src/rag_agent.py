@@ -230,13 +230,23 @@ class RAGAgent:
 
         tasks = [process_table(table) for table in tables]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        failures = 0
         for table, result in zip(tables, results):
             if isinstance(result, BaseException):
+                failures += 1
                 logger.exception(
-                    "Table %s failed during ingestion",
+                    "Table %s (from %s) failed during ingestion",
                     table.id,
+                    source_document,
                     exc_info=result,
                 )
+        if failures:
+            logger.warning(
+                "Processed %d tables from %s with %d failures",
+                len(tables),
+                source_document,
+                failures,
+            )
 
     async def _save_spreadsheet_table(
         self,

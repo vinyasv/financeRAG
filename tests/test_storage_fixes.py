@@ -268,13 +268,11 @@ class TestTableNamingFixes:
 
         Under the old filename-slug scheme, both ``nvidia_q1_2024.pdf`` and
         ``nvidia_q1_2025.pdf`` reduced to ``nvidiaq120`` and overwrote each
-        other. Under the new doc_id-prefix scheme, they get distinct names.
-
-        We pin the two doc_ids to letter-starting values so the test does
-        not become flaky on the ~14% of input pairs whose SHA prefixes
-        happen to start with a digit (which would trip validate_identifier
-        for unrelated reasons). The doc_id collision-freedom for the actual
-        nvidia filenames is asserted as a sanity check up top.
+        other. Under the new ``t_<doc_id>`` prefix the SHA-derived doc_ids
+        are collision-free, and the literal ``t_`` ensures the identifier
+        always starts with a letter even when the SHA prefix begins with
+        a digit -- so we can use the real ``document_id_from_filename``
+        outputs here.
         """
         from src.common.ids import document_id_from_filename
 
@@ -284,15 +282,10 @@ class TestTableNamingFixes:
         # The previously-colliding pair under the old slug scheme.
         filename_a = "nvidia_q1_2024.pdf"
         filename_b = "nvidia_q1_2025.pdf"
+        doc_a_id = document_id_from_filename(filename_a)
+        doc_b_id = document_id_from_filename(filename_b)
         # Sanity: SHA-derived IDs are collision-free for these two files.
-        assert document_id_from_filename(filename_a) != document_id_from_filename(
-            filename_b
-        )
-
-        # Pin to letter-starting doc_ids so the rest of the test is
-        # deterministic regardless of the specific SHA outputs.
-        doc_a_id = "doca123456789012"
-        doc_b_id = "docb123456789012"
+        assert doc_a_id != doc_b_id
 
         store.save_document(self._make_doc(doc_a_id, filename_a))
         store.save_document(self._make_doc(doc_b_id, filename_b))
@@ -343,15 +336,49 @@ class TestTableNamingFixes:
 
     def test_make_unique_table_name_uses_doc_id_prefix(self, tmp_path):
         """Direct unit test for _make_unique_table_name: the prefix is
-        ``t_`` plus the first 12 chars of the doc_id, not a filename slug.
+        ``t_`` plus the first 12 chars of the doc_id, not a filename slug,
+        and the suffix preserves uniqueness after identifier truncation.
         The ``t_`` prefix guarantees a letter-starting identifier even when
         the SHA-derived doc_id begins with a digit."""
         store = SQLiteStore(db_path=tmp_path / "unit.db")
         doc_id = "abcdef1234567890"
-        result = store._make_unique_table_name("revenue", doc_id)
-        assert result == "t_abcdef123456_revenue"
+        result = store._make_unique_table_name("revenue", doc_id, "table_1")
+        assert result.startswith("t_abcdef123456_revenue_")
+        assert len(result) <= 63
         # And independent of any document existing in the store.
         assert store.get_document(doc_id) is None
+
+    def test_long_same_doc_table_names_keep_distinct_native_tables(self, tmp_path):
+        """Long sanitized names that differ after the truncation boundary
+        must not collapse to the same native SQLite table."""
+        from src.models import Document
+
+        db_path = tmp_path / "long-name-collision.db"
+        store = SQLiteStore(db_path=db_path)
+        doc_id = "abcdef1234567890"
+        store.save_document(Document(id=doc_id, filename="report.pdf", page_count=1))
+
+        base = "a" * 48
+        table_a = self._make_table(doc_id, "table_a", f"{base}xx")
+        table_b = self._make_table(doc_id, "table_b", f"{base}yy")
+        table_a.rows = [{"quarter": "Q1", "revenue": 1}]
+        table_b.rows = [{"quarter": "Q1", "revenue": 2}]
+
+        store.save_table(table_a)
+        store.save_table(table_b)
+
+        native_tables = store.list_spreadsheet_tables()
+        native_names = sorted(t["table_name"] for t in native_tables)
+        assert len(native_names) == 2
+        assert native_names[0] != native_names[1]
+        assert all(len(name) <= 63 for name in native_names)
+
+        with store._get_connection() as conn:
+            values = set()
+            for name in native_names:
+                cursor = conn.execute(f'SELECT revenue FROM "{name}"')
+                values.update(row[0] for row in cursor.fetchall())
+        assert values == {1, 2}
 
     def test_vlm_table_name_with_spaces_is_sanitized(self, tmp_path):
         """ExtractedTable carrying a sanitized VLM-style name must save
@@ -383,6 +410,42 @@ class TestTableNamingFixes:
         assert re.match(r"^[a-zA-Z0-9_]+$", native_name), (
             f"native table name {native_name!r} is not SQL-safe"
         )
+
+    def test_vlm_extractor_sanitizes_raw_table_name(self):
+        """Targeted regression for the sanitization line in
+        ``vlm_extractor._parse_response``. The previous test only verified
+        the store accepts an already-sanitized name; this one drives the
+        actual extractor entry point with a free-form VLM-style payload
+        and asserts the resulting ExtractedTable.table_name is SQL-safe.
+
+        If someone removes the ``sanitize_table_name(name)`` call in
+        ``vlm_extractor.py``, this test fails -- the previous test would
+        not catch that regression.
+        """
+        import re as _re
+
+        from src.ingestion.vlm_extractor import VLMTableExtractor
+
+        extractor = VLMTableExtractor()
+        # Mirror the shape returned by the model.
+        payload = {
+            "tables": [
+                {
+                    "name": "Q1 FY26 Revenue",
+                    "columns": ["quarter", "revenue"],
+                    "rows": [{"quarter": "Q1", "revenue": 100}],
+                }
+            ]
+        }
+
+        extracted = extractor._parse_response(payload, page_number=1, document_id="doc123")
+
+        assert len(extracted) == 1
+        table = extracted[0]
+        assert _re.match(r"^[a-zA-Z0-9_]+$", table.table_name), (
+            f"VLM extractor must sanitize free-form names; got {table.table_name!r}"
+        )
+        assert " " not in table.table_name
 
 
 class TestPartialFailureTolerance:

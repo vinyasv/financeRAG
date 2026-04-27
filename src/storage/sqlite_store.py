@@ -1,5 +1,6 @@
 """SQLite storage for structured data (extracted tables)."""
 
+import hashlib
 import json
 import logging
 import re
@@ -311,7 +312,11 @@ class SQLiteStore:
                 df.columns = [self._sanitize_column_name(c) for c in df.columns]
                 
                 # Create unique table name (include doc context to avoid collisions)
-                native_table_name = self._make_unique_table_name(table.table_name, table.document_id)
+                native_table_name = self._make_unique_table_name(
+                    table.table_name,
+                    table.document_id,
+                    table.id,
+                )
                 
                 # Validate table name before DDL
                 validate_identifier(native_table_name)
@@ -343,20 +348,24 @@ class SQLiteStore:
             
             conn.commit()
     
-    def _make_unique_table_name(self, table_name: str, doc_id: str) -> str:
+    def _make_unique_table_name(
+        self,
+        table_name: str,
+        doc_id: str,
+        table_id: str | None = None,
+    ) -> str:
         """
         Create a unique, SQL-safe table name with document context.
 
         Uses the document ID (a SHA-derived alphanumeric string from
-        ``common.ids``) as the prefix instead of a filename slug. Filename
-        slugs collide for closely-named files (e.g. ``nvidia_q1_2024.pdf``
-        and ``nvidia_q1_2025.pdf`` both reduced to ``nvidiaq120``), causing
-        later tables to silently overwrite earlier ones. Document IDs are
-        collision-free per ingestion.
+        ``common.ids``) as the prefix instead of a filename slug, plus a
+        deterministic hash suffix to preserve uniqueness after SQLite's
+        63-character identifier limit is applied.
 
         Args:
             table_name: Base table name (already sanitized upstream)
             doc_id: Document ID — SHA-derived alphanumeric prefix
+            table_id: Optional extracted-table ID for same-document uniqueness
 
         Returns:
             Unique table name (max 63 chars, alphanumeric + underscore)
@@ -365,7 +374,12 @@ class SQLiteStore:
         # start with a digit; prefix with "t_" so the identifier always begins
         # with a letter (validate_identifier requires ^[a-zA-Z_]).
         safe_doc = doc_id[:12]
-        return f"t_{safe_doc}_{table_name}"[:63]
+        unique_key = table_id or f"{doc_id}:{table_name}"
+        suffix = hashlib.sha256(unique_key.encode()).hexdigest()[:8]
+        prefix = f"t_{safe_doc}_"
+        suffix_part = f"_{suffix}"
+        max_table_len = 63 - len(prefix) - len(suffix_part)
+        return f"{prefix}{table_name[:max_table_len]}{suffix_part}"
     
     def _parse_numeric(self, value: Any) -> float | None:
         """
@@ -746,4 +760,3 @@ class SQLiteStore:
             cursor.execute("DELETE FROM schema_clusters")
             conn.commit()
             logger.info("Cleared all schema clusters")
-
