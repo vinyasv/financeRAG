@@ -17,7 +17,6 @@ def make_agent() -> RAGAgent:
     agent.document_store = MagicMock()
     agent.chroma_store = MagicMock()
     agent.schema_cluster_manager = MagicMock()
-    agent.SPREADSHEET_SAMPLE_ROWS = 25
     return agent
 
 
@@ -49,6 +48,8 @@ def test_get_or_create_document_reuses_existing_document():
     agent = make_agent()
     existing = Document(id="doc_123", filename="report.pdf")
     agent.sqlite_store.get_document.return_value = existing
+    agent.document_store.get_full_text.return_value = "hello"
+    agent.chroma_store.count.return_value = 1
     agent._persist_document_payload = MagicMock()
 
     document, created = agent._get_or_create_document(
@@ -111,15 +112,25 @@ def test_save_spreadsheet_table_routes_native_and_fallback_paths():
     assert agent._assign_cluster_safe.await_count == 2
 
 
-def test_build_spreadsheet_chunk_preserves_metadata():
-    """Spreadsheet chunk helper should centralize chunk metadata consistently."""
+def test_build_spreadsheet_chunks_preserves_metadata_and_windows_rows():
+    """Spreadsheet chunks should cover row windows with stable metadata."""
     agent = make_agent()
-    sheet = SimpleNamespace(sheet_name="Revenue", raw_text="Row 1", row_count=40, headers=["a", "b", "c", "d", "e", "f"])
+    rows = [{"a": i, "b": i * 2} for i in range(250)]
+    sheet = SimpleNamespace(
+        sheet_name="Revenue",
+        rows=rows,
+        row_count=len(rows),
+        headers=["a", "b", "c", "d", "e", "f"],
+    )
 
-    chunk = agent._build_spreadsheet_chunk("doc_123", sheet)
+    chunks = agent._build_spreadsheet_chunks("doc_123", sheet)
 
+    assert len(chunks) == 3
+    chunk = chunks[0]
     assert chunk.document_id == "doc_123"
     assert chunk.section_title == "Revenue"
     assert chunk.start_line == 1
-    assert chunk.end_line == 25
+    assert chunk.end_line == 100
     assert chunk.metadata["columns"] == ["a", "b", "c", "d", "e"]
+    assert chunks[-1].start_line == 201
+    assert chunks[-1].end_line == 250

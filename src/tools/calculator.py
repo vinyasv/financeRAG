@@ -5,32 +5,8 @@ import operator
 import re
 from typing import Any
 
-from ..models import CalculationTranscript, OperandBinding, QueryRefusal, RefusalReason, ToolName
+from ..models import CalculationTranscript, OperandBinding, ToolName
 from .base import Tool
-
-
-class ComparabilityError(Exception):
-    """Raised when operands are not comparable for a calculation."""
-    
-    def __init__(self, message: str, what_was_found: str, what_is_missing: list[str]):
-        super().__init__(message)
-        self.message = message
-        self.what_was_found = what_was_found
-        self.what_is_missing = what_is_missing
-    
-    def to_refusal(self) -> QueryRefusal:
-        """Convert to a QueryRefusal for structured handling."""
-        return QueryRefusal(
-            reason=RefusalReason.INCOMPARABLE_METRICS,
-            explanation=self.message,
-            what_was_found=self.what_was_found,
-            what_is_missing=self.what_is_missing,
-            suggested_alternatives=[
-                "Query each metric separately",
-                "Verify the metrics use the same accounting standard",
-                "Check if the time periods are aligned"
-            ]
-        )
 
 
 class CalculatorTool(Tool):
@@ -62,7 +38,7 @@ class CalculatorTool(Tool):
     # Reference pattern: {step_id} or {step_id.field} or {step_id.field.subfield}
     REFERENCE_PATTERN = re.compile(r'\{([^}]+)\}')
     
-    async def execute(self, input_str: str, context: dict[str, Any] | None = None) -> CalculationTranscript | QueryRefusal:
+    async def execute(self, input_str: str, context: dict[str, Any] | None = None) -> CalculationTranscript:
         """
         Evaluate a math expression with full audit transparency.
         
@@ -72,28 +48,23 @@ class CalculatorTool(Tool):
             
         Returns:
             CalculationTranscript with bindings, resolved expression, and result,
-            OR QueryRefusal if comparability checks fail
         """
         ctx = context or {}
-        
-        try:
-            # Resolve references and collect bindings
-            resolved, bindings = self._resolve_references_with_bindings(input_str, ctx)
-            
-            # Parse and evaluate
-            result = self._safe_eval(resolved)
-            
-            # Build the transcript
-            return CalculationTranscript(
-                original_expression=input_str,
-                bindings=bindings,
-                resolved_expression=resolved,
-                result=result,
-                formula_description=self._infer_formula_description(input_str)
-            )
-        except ComparabilityError as e:
-            # Convert to structured refusal
-            return e.to_refusal()
+
+        # Resolve references and collect bindings
+        resolved, bindings = self._resolve_references_with_bindings(input_str, ctx)
+
+        # Parse and evaluate
+        result = self._safe_eval(resolved)
+
+        # Build the transcript
+        return CalculationTranscript(
+            original_expression=input_str,
+            bindings=bindings,
+            resolved_expression=resolved,
+            result=result,
+            formula_description=self._infer_formula_description(input_str)
+        )
     
     def _infer_formula_description(self, expression: str) -> str | None:
         """Infer a human-readable description from the expression."""
@@ -216,6 +187,7 @@ class CalculatorTool(Tool):
     
     # Maximum depth for expression evaluation (DoS protection)
     MAX_AST_DEPTH = 50
+    MAX_EXPONENT = 100
     
     def _eval_node(self, node: ast.AST, depth: int = 0) -> float:
         """
@@ -248,6 +220,8 @@ class CalculatorTool(Tool):
             # Handle division by zero
             if op_type == ast.Div and right == 0:
                 raise ValueError("Division by zero")
+            if op_type == ast.Pow and abs(right) > self.MAX_EXPONENT:
+                raise ValueError(f"Exponent too large (max {self.MAX_EXPONENT})")
             
             return op_func(left, right)
         
@@ -270,7 +244,7 @@ class CalculatorTool(Tool):
 
 
 # Convenience function for direct use
-async def calculate(expression: str, context: dict[str, Any] | None = None) -> CalculationTranscript | QueryRefusal:
+async def calculate(expression: str, context: dict[str, Any] | None = None) -> CalculationTranscript:
     """
     Evaluate a math expression with full audit transparency.
     
@@ -284,8 +258,7 @@ async def calculate(expression: str, context: dict[str, Any] | None = None) -> C
         >>> print(result.format_for_display())  # Shows full calculation transcript
         
     Returns:
-        CalculationTranscript on success, or QueryRefusal if comparability checks fail.
+        CalculationTranscript on success.
     """
     tool = CalculatorTool()
     return await tool.execute(expression, context)
-

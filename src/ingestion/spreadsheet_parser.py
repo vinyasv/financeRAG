@@ -8,8 +8,6 @@ from typing import Any
 
 import pandas as pd
 
-from ..common.ids import sheet_document_id
-from ..common.naming import sanitize_table_name as sanitize_sql_table_name
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +81,9 @@ class SpreadsheetParser:
         sheets = []
         
         for sheet_name in excel_file.sheet_names:
-            df = pd.read_excel(excel_file, sheet_name=sheet_name)
+            preview = pd.read_excel(excel_file, sheet_name=sheet_name, header=None, nrows=10)
+            header_row = self._detect_header_row(preview)
+            df = pd.read_excel(excel_file, sheet_name=sheet_name, header=header_row)
             
             # Skip empty sheets
             if df.empty:
@@ -103,6 +103,30 @@ class SpreadsheetParser:
                 "original_sheet_names": excel_file.sheet_names
             }
         )
+
+    def _detect_header_row(self, preview: pd.DataFrame) -> int:
+        """Infer a header row when workbooks have title rows above headers."""
+        if preview.empty:
+            return 0
+
+        row_scores: list[tuple[int, int, int]] = []
+        for idx, row in preview.iterrows():
+            values = [v for v in row.tolist() if not pd.isna(v)]
+            if not values:
+                continue
+            string_count = sum(1 for value in values if isinstance(value, str) and value.strip())
+            unique_count = len({str(value).strip().lower() for value in values if str(value).strip()})
+            row_scores.append((idx, len(values), string_count + unique_count))
+
+        if not row_scores:
+            return 0
+
+        first_idx, first_non_null, _ = row_scores[0]
+        for idx, non_null, score in row_scores[1:4]:
+            if first_idx == 0 and first_non_null <= 2 and non_null >= 2 and score >= non_null:
+                return idx
+
+        return 0
     
     def _parse_csv(self, file_path: Path) -> ParsedSpreadsheet:
         """Parse CSV file as single sheet."""
@@ -243,12 +267,3 @@ class SpreadsheetParser:
         
         return summary[:5]  # Limit to 5 columns
     
-    @staticmethod
-    def generate_document_id(filename: str, sheet_name: str | None = None) -> str:
-        """Generate unique document ID from filename and optional sheet name."""
-        return sheet_document_id(filename, sheet_name or "")
-    
-    @staticmethod
-    def sanitize_table_name(name: str) -> str:
-        """Sanitize sheet name for use as SQL table name."""
-        return sanitize_sql_table_name(name, numeric_prefix="sheet_")

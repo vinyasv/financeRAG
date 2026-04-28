@@ -4,10 +4,11 @@ import json
 import logging
 from typing import Any
 
+from ..common.json_utils import parse_json_response
 from ..common.prompts import STANDARD_PROMPT_GUARD, prepare_prompt_user_content
 from ..models import ExecutionPlan, ToolCall, ToolName
-from ..security import detect_injection_attempt
 from ..storage.schema_cluster import CompanyRegistry
+from ..validation import detect_injection_attempt
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,12 @@ class Planner:
     Uses an LLM to decompose queries into tool calls with dependencies.
     """
     
-    def __init__(self, llm_client: Any = None, sqlite_store: Any = None):
+    def __init__(
+        self,
+        llm_client: Any = None,
+        sqlite_store: Any = None,
+        company_registry: CompanyRegistry | None = None,
+    ):
         """
         Initialize the planner.
         
@@ -118,13 +124,13 @@ class Planner:
         """
         self.llm_client = llm_client
         self.sqlite_store = sqlite_store
+        self.company_registry = company_registry or CompanyRegistry()
     
     async def create_plan(
         self,
         query: str,
         available_tables: list[str] | None = None,
         available_documents: list[str] | None = None,
-        skip_llm: bool = False
     ) -> ExecutionPlan:
         """
         Create an execution plan for a query.
@@ -133,19 +139,17 @@ class Planner:
             query: The user's natural language query
             available_tables: List of available table names
             available_documents: List of available document IDs
-            skip_llm: Force skip LLM planning (use heuristics)
-            
         Returns:
             ExecutionPlan with steps to execute
         """
+        if not self.llm_client:
+            raise RuntimeError("Query planning requires an LLM client")
+
         # Fast path: Skip LLM for simple queries
-        if skip_llm or self._is_simple_query(query):
+        if self._is_simple_query(query):
             return self._create_fast_plan(query)
-        
-        if self.llm_client:
-            return await self._plan_with_llm(query, available_tables, available_documents)
-        else:
-            return self._plan_with_heuristics(query)
+
+        return await self._plan_with_llm(query, available_tables, available_documents)
     
     def _is_simple_query(self, query: str) -> bool:
         """
@@ -189,9 +193,7 @@ class Planner:
         for pattern in simple_patterns:
             if query_lower.startswith(pattern):
                 # Check it's not actually complex (multiple companies mentioned)
-                # Use CompanyRegistry for dynamic company detection
-                registry = CompanyRegistry()
-                known_companies = set(registry._registry.keys())
+                known_companies = set(self.company_registry._registry.keys())
                 company_count = sum(1 for c in known_companies if c.lower() in query_lower)
                 if company_count <= 1:
                     return True  # Simple single-entity query
@@ -245,7 +247,7 @@ class Planner:
         available_tables: list[str] | None,
         available_documents: list[str] | None
     ) -> ExecutionPlan:
-        """Create plan using LLM with prompt injection protection."""
+        """Create plan using LLM with prompt-injection advisory wrapping."""
         # Check for potential injection attempts (log but don't block)
         is_suspicious, patterns = detect_injection_attempt(query)
         if is_suspicious:
@@ -279,13 +281,7 @@ class Planner:
         
         # Parse response
         try:
-            # Clean up response if needed
-            json_str = response.strip()
-            if json_str.startswith("```"):
-                lines = json_str.split("\n")
-                json_str = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
-            
-            plan_data = json.loads(json_str)
+            plan_data = parse_json_response(response)
             
             # Validate required structure
             if "steps" not in plan_data or not isinstance(plan_data["steps"], list):
@@ -322,85 +318,26 @@ class Planner:
             if not steps:
                 raise ValueError("No valid steps parsed from LLM response")
             
-            return ExecutionPlan(
+            plan = ExecutionPlan(
                 query=plan_data.get("query", query),
                 reasoning=plan_data.get("reasoning", ""),
                 steps=steps
             )
+            errors = self.validate_plan(plan)
+            if errors:
+                raise ValueError("; ".join(errors))
+            return plan
             
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse LLM plan as JSON: {e}")
-            return self._plan_with_heuristics(query)
+            return self._create_fast_plan(query)
         except ValueError as e:
             logger.warning(f"LLM plan validation failed: {e}")
-            return self._plan_with_heuristics(query)
+            return self._create_fast_plan(query)
         except Exception as e:
             # Fall back to heuristics on parse error
             logger.warning(f"Failed to parse LLM plan: {e}")
-            return self._plan_with_heuristics(query)
-    
-    def _plan_with_heuristics(self, query: str) -> ExecutionPlan:
-        """
-        Create a plan using simple heuristics.
-        
-        This is a fallback when no LLM is available.
-        Note: For complex queries (calculations, multi-step reasoning),
-        an LLM client should be configured for proper decomposition.
-        """
-        query_lower = query.lower()
-        steps = []
-        step_num = 1
-        
-        # Detect query intent
-        needs_data = any(word in query_lower for word in [
-            "revenue", "profit", "cost", "expense", "sales", "income",
-            "quarter", "q1", "q2", "q3", "q4", "year", "month",
-            "total", "amount", "how much", "what was", "what is"
-        ])
-        
-        needs_context = any(word in query_lower for word in [
-            "why", "how does", "explain", "describe", "context",
-            "reason", "because", "strategy", "approach"
-        ])
-        
-        # Build steps - prefer parallel execution
-        if needs_data:
-            steps.append(ToolCall(
-                id=f"step_{step_num}",
-                tool=ToolName.SQL_QUERY,
-                input=query,
-                depends_on=[],
-                description="Retrieve structured data"
-            ))
-            step_num += 1
-        
-        if needs_context:
-            steps.append(ToolCall(
-                id=f"step_{step_num}",
-                tool=ToolName.VECTOR_SEARCH,
-                input=query,
-                depends_on=[],
-                description="Search for relevant context"
-            ))
-            step_num += 1
-        
-        # Default to vector search if no steps yet
-        if not steps:
-            steps.append(ToolCall(
-                id="step_1",
-                tool=ToolName.VECTOR_SEARCH,
-                input=query,
-                depends_on=[],
-                description="Search for relevant information"
-            ))
-        
-        reasoning = "Plan generated using heuristics (no LLM). For calculations and complex multi-step queries, configure an LLM client."
-        
-        return ExecutionPlan(
-            query=query,
-            reasoning=reasoning,
-            steps=steps
-        )
+            return self._create_fast_plan(query)
     
     def validate_plan(self, plan: ExecutionPlan) -> list[str]:
         """
@@ -409,7 +346,11 @@ class Planner:
         Returns list of validation errors (empty if valid).
         """
         errors = []
-        step_ids = {step.id for step in plan.steps}
+        step_ids = set()
+        for step in plan.steps:
+            if step.id in step_ids:
+                errors.append(f"Duplicate step ID: {step.id}")
+            step_ids.add(step.id)
         
         for step in plan.steps:
             # Check dependencies exist

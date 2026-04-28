@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from ..models import TextChunk, ToolName
+from ..models import ToolName
 from ..storage.chroma_store import ChromaStore
 from .base import Tool
 
@@ -102,96 +102,3 @@ class VectorSearchTool(Tool):
         
         return results
     
-    def search_sync(self, query: str, n_results: int | None = None) -> list[TextChunk]:
-        """
-        Synchronous search for use outside async context.
-        
-        Args:
-            query: The search query
-            n_results: Optional override for number of results
-            
-        Returns:
-            List of TextChunk objects
-        """
-        chunks, _ = self.chroma_store.search(
-            query=query,
-            n_results=n_results or self.n_results
-        )
-        return chunks
-
-
-class MultiQuerySearch:
-    """
-    Search with multiple query variations for better recall.
-    
-    Generates query variations and merges results.
-    """
-    
-    def __init__(self, chroma_store: ChromaStore | None = None):
-        self.chroma_store = chroma_store or ChromaStore()
-    
-    async def search(
-        self,
-        query: str,
-        n_results: int = 5,
-        generate_variations: bool = True
-    ) -> list[dict[str, Any]]:
-        """
-        Search with query expansion.
-        
-        Args:
-            query: The base query
-            n_results: Number of results per query
-            generate_variations: Whether to generate query variations
-            
-        Returns:
-            Merged and deduplicated results
-        """
-        queries = [query]
-        
-        if generate_variations:
-            queries.extend(self._generate_variations(query))
-        
-        # Collect all results
-        all_chunks: dict[str, tuple[TextChunk, float]] = {}
-        
-        for q in queries:
-            chunks, scores = self.chroma_store.search(q, n_results=n_results)
-            
-            for chunk, score in zip(chunks, scores):
-                # Keep highest score for each chunk
-                if chunk.id not in all_chunks or all_chunks[chunk.id][1] < score:
-                    all_chunks[chunk.id] = (chunk, score)
-        
-        # Sort by score and return top results
-        sorted_results = sorted(
-            all_chunks.values(),
-            key=lambda x: x[1],
-            reverse=True
-        )[:n_results]
-        
-        return [
-            {
-                "content": chunk.content,
-                "document_id": chunk.document_id,
-                "page_number": chunk.page_number,
-                "section_title": chunk.section_title,
-                "relevance_score": round(score, 3)
-            }
-            for chunk, score in sorted_results
-        ]
-    
-    def _generate_variations(self, query: str) -> list[str]:
-        """Generate query variations for better recall."""
-        variations = []
-        
-        # Add question form if not already
-        if not query.endswith("?"):
-            variations.append(query + "?")
-        
-        # Add "what is" prefix
-        if not query.lower().startswith(("what", "how", "why", "when", "where")):
-            variations.append(f"What is {query.lower()}?")
-        
-        return variations
-

@@ -381,43 +381,6 @@ class SQLiteStore:
         max_table_len = 63 - len(prefix) - len(suffix_part)
         return f"{prefix}{table_name[:max_table_len]}{suffix_part}"
     
-    def _parse_numeric(self, value: Any) -> float | None:
-        """
-        Try to parse a value as a number for SQL storage.
-        
-        Handles common financial formatting:
-        - Thousands separators (commas)
-        - Currency symbols ($)
-        - Percentage signs (%)
-        - Accounting notation for negatives (parentheses)
-        
-        Args:
-            value: The value to parse
-            
-        Returns:
-            Float if parseable, None otherwise
-        """
-        if value is None:
-            return None
-        
-        if isinstance(value, (int, float)):
-            return float(value)
-        
-        if isinstance(value, str):
-            # Remove common formatting
-            cleaned = value.replace(",", "").replace("$", "").replace("%", "").strip()
-            
-            # Handle parentheses as negative (accounting notation)
-            if cleaned.startswith("(") and cleaned.endswith(")"):
-                cleaned = "-" + cleaned[1:-1]
-            
-            try:
-                return float(cleaned)
-            except ValueError:
-                return None
-        
-        return None
-    
     def save_spreadsheet_native(self, table_name: str, df: pd.DataFrame, doc_id: str) -> None:
         """
         Save a spreadsheet as a native SQL table for fast queries.
@@ -746,17 +709,3 @@ class SQLiteStore:
                 "centroid": row["centroid"]
             }
     
-    def delete_cluster(self, cluster_id: str) -> None:
-        """Delete a cluster."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM schema_clusters WHERE cluster_id = ?", (cluster_id,))
-            conn.commit()
-    
-    def clear_all_clusters(self) -> None:
-        """Clear all clusters (for re-ingestion)."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM schema_clusters")
-            conn.commit()
-            logger.info("Cleared all schema clusters")

@@ -90,6 +90,14 @@ class TestCalculatorTool:
     def test_invalid_expression(self, calculator):
         with pytest.raises(ValueError):
             asyncio.run(calculator.execute("2 +"))
+
+    def test_power_allows_small_exponent(self, calculator):
+        result = asyncio.run(calculator.execute("2 ** 10"))
+        assert result.result == 1024.0
+
+    def test_power_rejects_large_exponent(self, calculator):
+        with pytest.raises(ValueError, match="Exponent too large"):
+            asyncio.run(calculator.execute("2 ** 101"))
     
     def test_unknown_reference(self, calculator):
         with pytest.raises(ValueError, match="unknown step"):

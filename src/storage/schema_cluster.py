@@ -6,12 +6,15 @@ Groups tables by Company + Domain hierarchy to ensure:
 3. Scalability: Only relevant schemas included in LLM prompts
 """
 
+import asyncio
 import json
 import logging
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
+
+from ..common.json_utils import parse_json_response
 
 logger = logging.getLogger(__name__)
 
@@ -286,7 +289,10 @@ class CompanyRegistry:
         if self.llm_client:
             try:
                 prompt = COMPANY_EXTRACTION_PROMPT.format(filename=filename)
-                response = await self.llm_client.generate(prompt)
+                response = await asyncio.wait_for(
+                    self.llm_client.generate(prompt),
+                    timeout=LLM_TIMEOUT_SECONDS,
+                )
                 company = response.strip().lower().replace(" ", "_")
                 
                 # Validate response
@@ -431,11 +437,6 @@ class CompanyRegistry:
 _company_registry: CompanyRegistry | None = None
 
 
-def get_company_registry() -> CompanyRegistry | None:
-    """Get the global company registry instance."""
-    return _company_registry
-
-
 def extract_company_from_table_name(table_name: str) -> str:
     """
     Extract company identifier from table name.
@@ -527,6 +528,7 @@ MAX_CLUSTER_KEYWORDS = 300  # Limit keyword set size per cluster
 MAX_TABLES_PER_CLUSTER = 100  # Warn if cluster exceeds this
 MAX_FALLBACK_TABLES = 50  # Limit tables in fallback mode to prevent context overflow
 CACHE_TTL_SECONDS = 300  # 5-minute TTL for table metadata cache
+LLM_TIMEOUT_SECONDS = 30
 MAX_DESCRIPTION_KEYWORDS = 100  # Limit keywords extracted from descriptions
 
 class SchemaClusterManager:
@@ -663,16 +665,11 @@ class SchemaClusterManager:
             )
             
             # Call LLM
-            response = await self.llm_client.generate(prompt)
-            response = response.strip()
-            
-            # Parse JSON response
-            # Try to extract JSON from response (handle markdown code blocks)
-            json_match = re.search(r'\{[^}]+\}', response)
-            if json_match:
-                result = json.loads(json_match.group())
-            else:
-                raise ValueError(f"No JSON found in response: {response[:100]}")
+            response = await asyncio.wait_for(
+                self.llm_client.generate(prompt),
+                timeout=LLM_TIMEOUT_SECONDS,
+            )
+            result = parse_json_response(response)
             
             # Validate and normalize company
             company = result.get("company", "general").lower().strip()
@@ -713,12 +710,6 @@ class SchemaClusterManager:
         table_keywords = self._extract_keywords(table_name, columns, description)
         domain_id = self._match_domain(table_keywords)
         return (company, domain_id)
-    
-    def get_company_stats(self) -> dict:
-        """Get statistics about learned companies."""
-        if self.company_registry:
-            return self.company_registry.get_stats()
-        return {"total_patterns": 0, "unique_companies": 0, "companies": []}
     
     async def assign_table(
         self,

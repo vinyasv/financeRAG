@@ -92,23 +92,9 @@ class Config:
         return os.getenv("OPENROUTER_API_KEY")
     
     @property
-    def openai_api_key(self) -> str | None:
-        """Get OpenAI API key from environment."""
-        return os.getenv("OPENAI_API_KEY")
-    
-    @property
-    def anthropic_api_key(self) -> str | None:
-        """Get Anthropic API key from environment."""
-        return os.getenv("ANTHROPIC_API_KEY")
-    
-    @property
     def has_llm_key(self) -> bool:
-        """Check if any LLM API key is configured."""
-        return bool(
-            self.openrouter_api_key or 
-            self.openai_api_key or 
-            self.anthropic_api_key
-        )
+        """Check if an OpenRouter API key is configured."""
+        return bool(self.openrouter_api_key)
     
     def __repr__(self) -> str:
         """
@@ -120,12 +106,9 @@ class Config:
         return (
             f"Config("
             f"llm_model='{self.llm_model}', "
-            f"has_openrouter={bool(self.openrouter_api_key)}, "
-            f"has_openai={bool(self.openai_api_key)}, "
-            f"has_anthropic={bool(self.anthropic_api_key)})"
+            f"has_openrouter={bool(self.openrouter_api_key)})"
         )
 
 
 # Global config instance
 config = Config()
-

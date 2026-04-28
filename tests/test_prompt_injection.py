@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test prompt injection protection measures."""
+"""Test suspicious prompt-pattern advisory measures."""
 
 import sys
 from pathlib import Path
@@ -7,13 +7,15 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.security import (
+from src.common.prompts import (
+    sanitize_user_input,
+    wrap_user_content,
+)
+from src.validation import (
     MAX_QUERY_LENGTH,
     detect_injection_attempt,
-    sanitize_user_input,
     validate_file_size,
-    validate_path_safety,
-    wrap_user_content,
+    validate_safe_filename as validate_path_safety,
 )
 
 
@@ -122,7 +124,7 @@ def test_wrap_user_content():
 
 
 def test_path_validation():
-    """Test path traversal protection."""
+    """Test path traversal validation."""
     print("\n" + "=" * 60)
     print("Testing Path Validation")
     print("=" * 60)
@@ -210,7 +212,7 @@ def main():
             all_passed = False
     
     if all_passed:
-        print("\n🎉 All prompt injection protection tests passed!")
+        print("\nAll suspicious prompt-pattern advisory tests passed!")
         return 0
     else:
         print("\n⚠️  Some tests failed. Please review the output above.")

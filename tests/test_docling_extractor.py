@@ -117,6 +117,27 @@ class TestVisionTableExtractor:
         assert tables[0].document_id == "test_doc"
         assert len(tables[0].rows) == 2
 
+    def test_extract_tables_uses_to_thread(self, extractor, tmp_path, monkeypatch):
+        """Docling conversion should not block the event loop."""
+        pdf_path = tmp_path / "test.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4 test")
+        mock_converter = Mock()
+        mock_result = Mock()
+        mock_doc = Mock()
+        mock_doc.tables = []
+        mock_result.document = mock_doc
+        extractor._converter = mock_converter
+
+        async def fake_to_thread(func, *args, **kwargs):
+            assert func is mock_converter.convert
+            return mock_result
+
+        monkeypatch.setattr("src.ingestion.vision_table_extractor.asyncio.to_thread", fake_to_thread)
+
+        tables = asyncio.run(extractor.extract_tables_from_pdf(pdf_path, "test_doc"))
+
+        assert tables == []
+
 
 class TestIntegration:
     """Integration tests with real PDFs."""

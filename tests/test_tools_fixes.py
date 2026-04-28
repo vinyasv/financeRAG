@@ -71,7 +71,6 @@ class TestSQLExecutorFixes:
     
     def test_error_field_populated_on_failure(self):
         """SQLExecutor should populate error field on failure."""
-        from src.models import SQLQueryResult
         from src.tools.sql_query import SQLExecutor
         
         executor = SQLExecutor()
@@ -79,9 +78,9 @@ class TestSQLExecutorFixes:
         # Execute invalid SQL
         result = executor.execute("INVALID SQL QUERY HERE")
         
-        assert isinstance(result, SQLQueryResult)
-        assert result.error is not None
-        assert len(result.rows) == 0
+        assert isinstance(result, dict)
+        assert result["error"] is not None
+        assert len(result["rows"]) == 0
 
 
 class TestGetDocumentFixes:
@@ -127,24 +126,6 @@ class TestGetDocumentFixes:
         # Valid with underscores
         result = asyncio.run(tool.execute("my_document_id"))
         assert "error" not in result or "Invalid document ID" not in result.get("error", "")
-
-
-class TestSQLQueryResultModel:
-    """Tests for SQLQueryResult model error field."""
-    
-    def test_error_field_exists(self):
-        """SQLQueryResult should have an error field."""
-        from src.models import SQLQueryResult
-        
-        result = SQLQueryResult(query="SELECT 1", error="Test error")
-        assert result.error == "Test error"
-    
-    def test_error_field_defaults_to_none(self):
-        """Error field should default to None."""
-        from src.models import SQLQueryResult
-        
-        result = SQLQueryResult(query="SELECT 1")
-        assert result.error is None
 
 
 if __name__ == "__main__":

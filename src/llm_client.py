@@ -174,42 +174,6 @@ class OpenRouterClient(OpenAICompatibleClient):
         return OPENROUTER_MODELS.copy()
 
 
-class OpenAIClient(OpenAICompatibleClient):
-    """Direct OpenAI API client."""
-
-    provider = "openai"
-
-    def __init__(self, api_key: str | None = None, model: str = "gpt-4o-mini"):
-        super().__init__(api_key=api_key or os.getenv("OPENAI_API_KEY"), model=model)
-
-
-class AnthropicClient(LLMClient):
-    """Direct Anthropic API client."""
-
-    provider = "anthropic"
-    
-    def __init__(self, api_key: str | None = None, model: str = "claude-3-haiku-20240307"):
-        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
-        self.model = model
-        self._client = None
-    
-    def _ensure_client(self):
-        if self._client is None:
-            from anthropic import AsyncAnthropic
-            self._client = AsyncAnthropic(api_key=self.api_key)
-    
-    async def generate(self, prompt: str) -> str:
-        self._ensure_client()
-        
-        response = await self._client.messages.create(
-            model=self.model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        
-        return response.content[0].text if response.content else ""
-
-
 class MockLLMClient(LLMClient):
     """Mock LLM client for testing without API calls."""
 
@@ -241,7 +205,7 @@ def get_llm_client(
     Get an LLM client based on available credentials.
     
     Args:
-        provider: "openrouter", "openai", "anthropic", "auto", or "none"
+        provider: "openrouter", "auto", or "none"
         model: Optional model name override
         
     Returns:
@@ -256,25 +220,11 @@ def get_llm_client(
     default_model = model or config.llm_model
     
     if provider == "auto":
-        # Try OpenRouter first (most flexible)
         if os.getenv("OPENROUTER_API_KEY"):
             return OpenRouterClient(model=default_model)
-        # Then OpenAI
-        if os.getenv("OPENAI_API_KEY"):
-            return OpenAIClient(model=default_model)
-        # Then Anthropic
-        if os.getenv("ANTHROPIC_API_KEY"):
-            return AnthropicClient(model=default_model)
-        # No API keys available
         return None
     
     if provider == "openrouter":
         return OpenRouterClient(model=default_model)
     
-    if provider == "openai":
-        return OpenAIClient(model=default_model)
-    
-    if provider == "anthropic":
-        return AnthropicClient(model=default_model)
-    
-    raise ValueError(f"Unknown LLM provider: {provider}. Valid options: 'auto', 'openrouter', 'openai', 'anthropic', 'none'")
+    raise ValueError(f"Unknown LLM provider: {provider}. Valid options: 'auto', 'openrouter', 'none'")

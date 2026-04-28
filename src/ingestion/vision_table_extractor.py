@@ -11,6 +11,7 @@ Speed optimizations applied:
 """
 
 import hashlib
+import asyncio
 import logging
 import multiprocessing
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Any
 
 from ..common.naming import sanitize_table_name
 from ..models import ExtractedTable
+from .exceptions import ExtractionFailed
 from .utils import normalize_column_name, parse_numeric, table_to_text
 
 logger = logging.getLogger(__name__)
@@ -36,13 +38,8 @@ class VisionTableExtractor:
     - Optimized batch sizes for MPS
     """
     
-    def __init__(self, vision_model: str | None = None):
-        """
-        Initialize the Docling table extractor.
-        
-        Args:
-            vision_model: Unused, kept for API compatibility.
-        """
+    def __init__(self):
+        """Initialize the Docling table extractor."""
         self._converter = None
     
     def _ensure_docling(self):
@@ -119,8 +116,8 @@ class VisionTableExtractor:
         logger.info(f"Extracting tables with Docling from: {pdf_path.name}")
         
         try:
-            # Convert the document
-            result = self._converter.convert(str(pdf_path))
+            # Convert the document off the event loop; Docling conversion is blocking.
+            result = await asyncio.to_thread(self._converter.convert, str(pdf_path))
             doc = result.document
             
             tables = []
@@ -163,7 +160,7 @@ class VisionTableExtractor:
             
         except Exception as e:
             logger.error(f"Docling extraction failed: {e}")
-            raise
+            raise ExtractionFailed(str(e)) from e
     
     def _dataframe_to_extracted_table(
         self,

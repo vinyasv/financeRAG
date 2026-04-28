@@ -315,4 +315,6 @@ def test_sql_query_tool_returns_dict_shape_for_1x1_result(tmp_path, monkeypatch)
     assert isinstance(result, dict), (
         f"1x1 SQL result must be a dict, not a bare scalar; got {type(result).__name__}: {result!r}"
     )
-    assert result == {"value": 100, "column": "revenue"}
+    assert result["value"] == 100
+    assert result["column"] == "revenue"
+    assert "__sql_provenance" in result

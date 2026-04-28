@@ -1,14 +1,17 @@
 """LLM-based schema detection for extracted tables."""
 
+import asyncio
 import json
 import logging
 import re
 from typing import Any
 
+from ..common.json_utils import parse_json_response
 from ..common.text_rendering import table_to_text
 from ..models import ColumnType, ExtractedTable
 
 logger = logging.getLogger(__name__)
+LLM_TIMEOUT_SECONDS = 30
 
 
 # Default prompt for schema detection
@@ -122,19 +125,13 @@ class SchemaDetector:
         
         try:
             # Call LLM
-            response = await self.llm_client.generate(prompt)
-            
-            # Clean up response (remove markdown if present)
-            response = response.strip()
-            if response.startswith("```"):
-                lines = response.split("\n")
-                lines = lines[1:]
-                if lines and lines[-1].strip().startswith("```"):
-                    lines = lines[:-1]
-                response = "\n".join(lines)
-            
+            response = await asyncio.wait_for(
+                self.llm_client.generate(prompt),
+                timeout=LLM_TIMEOUT_SECONDS,
+            )
+
             # Parse response
-            schema_data = json.loads(response)
+            schema_data = parse_json_response(response)
             
             # Update table name if provided
             if "table_name" in schema_data:
@@ -184,6 +181,9 @@ class SchemaDetector:
             
         except json.JSONDecodeError as e:
             logger.warning(f"LLM returned invalid JSON: {e}")
+            return self._detect_with_heuristics(table)
+        except asyncio.TimeoutError:
+            logger.warning(f"LLM schema detection timed out after {LLM_TIMEOUT_SECONDS}s")
             return self._detect_with_heuristics(table)
         except Exception as e:
             # Fall back to heuristics on error
@@ -300,26 +300,3 @@ class SchemaDetector:
         
         return f"{table_type} with {row_count} rows. Key columns: {col_desc}"
 
-
-async def detect_schemas_batch(
-    tables: list[ExtractedTable],
-    llm_client: Any = None
-) -> list[ExtractedTable]:
-    """
-    Detect schemas for multiple tables.
-    
-    Args:
-        tables: List of extracted tables
-        llm_client: Optional LLM client
-        
-    Returns:
-        Tables with enhanced schemas
-    """
-    detector = SchemaDetector(llm_client)
-    
-    enhanced = []
-    for table in tables:
-        enhanced_table = await detector.detect_schema(table)
-        enhanced.append(enhanced_table)
-    
-    return enhanced

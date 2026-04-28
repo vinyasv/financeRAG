@@ -8,7 +8,6 @@ to extract tabular data in structured JSON format.
 
 import asyncio
 import base64
-import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -16,9 +15,11 @@ from typing import Dict, List, Optional
 import aiohttp
 import fitz  # PyMuPDF
 
+from ..common.json_utils import parse_json_response
 from ..common.naming import sanitize_table_name
 from ..config import config
 from ..models import ExtractedTable
+from .exceptions import ExtractionFailed
 
 logger = logging.getLogger(__name__)
 
@@ -73,20 +74,20 @@ class VLMTableExtractor:
         """
         if not self.api_key:
             logger.error("No OpenRouter API key found. Cannot perform VLM extraction.")
-            return []
+            raise ExtractionFailed("No OpenRouter API key configured")
 
         try:
-            doc = fitz.open(pdf_path)
-            tasks = []
-            
-            logger.info(f"Starting VLM extraction for {pdf_path.name} ({len(doc)} pages) using {self.model}")
-            
-            # Create extraction task for each page
-            for page_num in range(len(doc)):
-                tasks.append(self._process_page(doc, page_num, document_id))
-            
-            # Run all pages concurrently (rate limited by semaphore)
-            results = await asyncio.gather(*tasks)
+            with fitz.open(pdf_path) as doc:
+                tasks = []
+
+                logger.info(f"Starting VLM extraction for {pdf_path.name} ({len(doc)} pages) using {self.model}")
+
+                # Create extraction task for each page
+                for page_num in range(len(doc)):
+                    tasks.append(self._process_page(doc, page_num, document_id))
+
+                # Run all pages concurrently (rate limited by semaphore)
+                results = await asyncio.gather(*tasks)
             
             # Flatten results
             all_tables = []
@@ -98,7 +99,9 @@ class VLMTableExtractor:
             
         except Exception as e:
             logger.error(f"VLM extraction failed for {pdf_path.name}: {e}")
-            return []
+            if isinstance(e, ExtractionFailed):
+                raise
+            raise ExtractionFailed(f"VLM extraction failed for {pdf_path.name}: {e}") from e
 
     async def _process_page(self, doc, page_num: int, document_id: str) -> List[ExtractedTable]:
         """Process a single page: Convert to image -> Call VLM -> Parse JSON."""
@@ -120,7 +123,7 @@ class VLMTableExtractor:
                 
             except Exception as e:
                 logger.warning(f"Failed to process page {page_num + 1}: {e}")
-                return []
+                raise ExtractionFailed(f"Failed to process page {page_num + 1}: {e}") from e
 
     async def _call_vlm_api(self, b64_img: str) -> Optional[Dict]:
         """Send image to OpenRouter API."""
@@ -176,18 +179,12 @@ class VLMTableExtractor:
                     text = await resp.text()
                     # Log first 200 chars to avoid huge HTML dumps
                     logger.error(f"VLM API Error {resp.status}: {text[:200]}...")
-                    return None
+                    raise ExtractionFailed(f"VLM API returned status {resp.status}")
                     
                 result = await resp.json()
                 content = result['choices'][0]['message']['content']
                 
-                # Strip markdown code blocks if present (despite prompt)
-                if content.startswith("```json"):
-                    content = content[7:]
-                if content.endswith("```"):
-                    content = content[:-3]
-                    
-                return json.loads(content)
+                return parse_json_response(content)
 
     def _parse_response(self, data: Optional[Dict], page_number: int, document_id: str) -> List[ExtractedTable]:
         """Convert VLM JSON response to ExtractedTable objects."""

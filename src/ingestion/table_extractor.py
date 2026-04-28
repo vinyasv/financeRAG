@@ -151,9 +151,6 @@ class TableExtractor:
         return value
     
 
-    def _is_numeric(self, value: str) -> bool:
-        """Check if a value appears to be numeric."""
-        return is_numeric(value)
     
     def _generate_table_id(self, document_id: str, page_number: int, columns: list[str]) -> str:
         """Generate a unique table ID."""

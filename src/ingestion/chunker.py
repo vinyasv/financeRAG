@@ -62,28 +62,24 @@ class SemanticChunker:
             if not page.text.strip():
                 continue
             
-            # Track line positions for this page
             page_start_line = page.start_line_offset + 1  # 1-indexed
-            current_line_in_page = 1
             
-            # Split page into paragraphs
-            paragraphs = self._split_into_paragraphs(page.text)
+            paragraphs = self._split_into_paragraphs_with_lines(page.text)
             
             # Process paragraphs into chunks
             current_chunk_text = ""
             current_section = None
             chunk_start_line = page_start_line
             
-            for para in paragraphs:
-                # Calculate line number for this paragraph
-                para_line_count = para.count('\n') + 1
-                para_start_line = page_start_line + current_line_in_page - 1
+            for para, para_start_offset, para_end_offset in paragraphs:
+                para_start_line = page_start_line + para_start_offset
+                para_end_line = page_start_line + para_end_offset
                 
                 # Detect section headers
                 if self._is_section_header(para):
                     # Save current chunk if any
                     if current_chunk_text.strip():
-                        chunk_end_line = para_start_line - 1
+                        chunk_end_line = max(chunk_start_line, para_start_line - 1)
                         chunks.append(self._create_chunk(
                             document_id=document_id,
                             content=current_chunk_text.strip(),
@@ -97,8 +93,7 @@ class SemanticChunker:
                         current_chunk_text = ""
                     
                     current_section = para.strip()
-                    current_line_in_page += para_line_count + 1  # +1 for paragraph gap
-                    chunk_start_line = page_start_line + current_line_in_page - 1
+                    chunk_start_line = para_end_line + 1
                     continue
                 
                 # Check if adding this paragraph exceeds max size
@@ -107,7 +102,7 @@ class SemanticChunker:
                 if word_count > self.config.max_words:
                     # Save current chunk
                     if current_chunk_text.strip():
-                        chunk_end_line = para_start_line - 1
+                        chunk_end_line = max(chunk_start_line, para_start_line - 1)
                         chunks.append(self._create_chunk(
                             document_id=document_id,
                             content=current_chunk_text.strip(),
@@ -123,6 +118,7 @@ class SemanticChunker:
                     if len(para.split()) > self.config.max_words:
                         # Split paragraph into sentences
                         para_chunks = self._split_large_text(para)
+                        para_line_count = max(1, para_end_offset - para_start_offset + 1)
                         lines_per_chunk = max(1, para_line_count // len(para_chunks))
                         chunk_line = para_start_line
                         
@@ -139,7 +135,7 @@ class SemanticChunker:
                             chunk_index += 1
                             chunk_line += lines_per_chunk
                         current_chunk_text = ""
-                        chunk_start_line = para_start_line + para_line_count
+                        chunk_start_line = para_end_line + 1
                     else:
                         # Start new chunk with overlap
                         overlap = self._get_overlap(current_chunk_text)
@@ -148,9 +144,6 @@ class SemanticChunker:
                 else:
                     # Add to current chunk
                     current_chunk_text = current_chunk_text + "\n\n" + para if current_chunk_text else para
-                
-                current_line_in_page += para_line_count + 1  # +1 for paragraph gap
-            
             # Save remaining chunk for this page
             if current_chunk_text.strip():
                 chunk_end_line = page_start_line + page.line_count - 1
@@ -167,13 +160,25 @@ class SemanticChunker:
         
         return chunks
     
-    def _split_into_paragraphs(self, text: str) -> list[str]:
-        """Split text into paragraphs."""
-        # Split on double newlines or multiple whitespace
-        paragraphs = re.split(r'\n\s*\n', text)
-        
-        # Clean up and filter empty
-        return [p.strip() for p in paragraphs if p.strip()]
+    def _split_into_paragraphs_with_lines(self, text: str) -> list[tuple[str, int, int]]:
+        """Split text into paragraphs with 0-indexed start/end line offsets."""
+        paragraphs: list[tuple[str, int, int]] = []
+        current: list[str] = []
+        start_line = 0
+
+        for line_no, line in enumerate(text.splitlines()):
+            if line.strip():
+                if not current:
+                    start_line = line_no
+                current.append(line)
+            elif current:
+                paragraphs.append(("\n".join(current).strip(), start_line, line_no - 1))
+                current = []
+
+        if current:
+            paragraphs.append(("\n".join(current).strip(), start_line, len(text.splitlines()) - 1))
+
+        return paragraphs
     
     def _is_section_header(self, text: str) -> bool:
         """Check if text looks like a section header."""

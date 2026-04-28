@@ -2,10 +2,12 @@
 
 import asyncio
 import logging
+import re
 import sqlite3
 from typing import Any
 
-from ..models import SQLQueryResult, ToolName
+from ..common.json_utils import strip_markdown_fence
+from ..models import ToolName
 from ..storage.sqlite_store import SecurityError, SQLiteStore
 from .base import Tool
 
@@ -88,10 +90,16 @@ class SQLQueryTool(Tool):
         # Execute the SQL
         try:
             rows = self.sqlite_store.execute_query(sql)
+            provenance = self._build_provenance(sql)
             
             # Format result
             if not rows:
-                return {"columns": [], "rows": [], "message": "No results found"}
+                return {
+                    "columns": [],
+                    "rows": [],
+                    "message": "No results found",
+                    "__sql_provenance": provenance,
+                }
             
             columns = list(rows[0].keys()) if rows else []
             
@@ -101,16 +109,21 @@ class SQLQueryTool(Tool):
             # bindings because the executor/calculator could not navigate
             # into a non-dict context value.
             if len(rows) == 1 and len(columns) == 1:
-                return {"value": rows[0][columns[0]], "column": columns[0]}
+                return {
+                    "value": rows[0][columns[0]],
+                    "column": columns[0],
+                    "__sql_provenance": provenance,
+                }
 
             # If single row, return as flat dict
             if len(rows) == 1:
-                return rows[0]
+                return {**rows[0], "__sql_provenance": provenance}
             
             return {
                 "columns": columns,
                 "rows": rows,
-                "row_count": len(rows)
+                "row_count": len(rows),
+                "__sql_provenance": provenance,
             }
             
         except SecurityError as e:
@@ -129,8 +142,7 @@ class SQLQueryTool(Tool):
         """Convert natural language to SQL."""
         if self.llm_client:
             return await self._generate_sql_with_llm(query)
-        else:
-            return self._generate_sql_heuristic(query)
+        raise RuntimeError("SQL query generation requires an LLM client")
     
     async def _generate_sql_with_llm(self, query: str) -> str:
         """Use LLM to generate SQL with clustered schema context."""
@@ -158,54 +170,42 @@ class SQLQueryTool(Tool):
             logger.warning(f"LLM SQL generation timed out after {LLM_TIMEOUT_SECONDS}s")
             raise ValueError("SQL generation timed out. Please try a simpler query.")
         
-        # Clean up response
-        sql = response.strip()
-        
-        # Remove markdown code blocks if present
-        if sql.startswith("```"):
-            lines = sql.split("\n")
-            # Remove first line (```sql or ```)
-            lines = lines[1:]
-            # Remove last line if it's just closing backticks
-            if lines and lines[-1].strip().startswith("```"):
-                lines = lines[:-1]
-            sql = "\n".join(lines)
-        
-        return sql.strip()
-    
-    def _generate_sql_heuristic(self, query: str) -> str:
-        """
-        Generate SQL using simple heuristics.
-        
-        This is a fallback when no LLM is available.
-        """
-        query_lower = query.lower()
-        
-        # Get available tables
-        tables = self.sqlite_store.list_spreadsheet_tables()
-        if not tables:
-            return "SELECT 'No tables available' as message"
-        
-        # Find relevant table based on query keywords
-        matching_table = None
-        for table in tables:
-            table_name = table['table_name'].lower()
-            # Check if table name words appear in query
-            for word in table_name.split('_'):
-                if len(word) > 3 and word in query_lower:
-                    matching_table = table
-                    break
-            if matching_table:
-                break
-        
-        if not matching_table:
-            # Default to first table
-            matching_table = tables[0]
-        
-        table_name = matching_table['table_name']
-        
-        # Return simple SELECT
-        return f"SELECT * FROM \"{table_name}\" LIMIT 20"
+        return strip_markdown_fence(response)
+
+    def _build_provenance(self, sql: str) -> dict[str, Any]:
+        """Attach source-table metadata for citation extraction."""
+        table_names = self._extract_table_names(sql)
+        if not table_names:
+            return {"sql": sql, "tables": []}
+
+        table_map = {
+            table["table_name"]: table
+            for table in self.sqlite_store.list_spreadsheet_tables()
+        }
+        return {
+            "sql": sql,
+            "tables": [
+                {
+                    "table_name": name,
+                    "document_id": table_map.get(name, {}).get("document_id", "unknown"),
+                    "columns": table_map.get(name, {}).get("columns", []),
+                }
+                for name in table_names
+            ],
+        }
+
+    def _extract_table_names(self, sql: str) -> list[str]:
+        """Extract FROM/JOIN table names from a generated SELECT."""
+        names: list[str] = []
+        for match in re.finditer(
+            r'\b(?:FROM|JOIN)\s+(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))',
+            sql,
+            re.IGNORECASE,
+        ):
+            name = match.group(1) or match.group(2)
+            if name and name not in names:
+                names.append(name)
+        return names
 
 
 class SQLExecutor:
@@ -218,42 +218,19 @@ class SQLExecutor:
     def __init__(self, sqlite_store: SQLiteStore | None = None):
         self.sqlite_store = sqlite_store or SQLiteStore()
     
-    def execute(self, sql: str) -> SQLQueryResult:
+    def execute(self, sql: str) -> dict[str, Any]:
         """Execute a SQL query and return structured result."""
         try:
             rows = self.sqlite_store.execute_query(sql)
             columns = list(rows[0].keys()) if rows else []
             
-            return SQLQueryResult(
-                query=sql,
-                columns=columns,
-                rows=rows,
-                row_count=len(rows)
-            )
+            return {"query": sql, "columns": columns, "rows": rows, "row_count": len(rows)}
         except SecurityError as e:
             logger.warning(f"Security error in SQLExecutor: {e}")
-            return SQLQueryResult(
-                query=sql,
-                columns=[],
-                rows=[],
-                row_count=0,
-                error=f"Query not allowed: {e}"
-            )
+            return {"query": sql, "columns": [], "rows": [], "row_count": 0, "error": f"Query not allowed: {e}"}
         except sqlite3.Error as e:
             logger.warning(f"SQLExecutor database error: {e}")
-            return SQLQueryResult(
-                query=sql,
-                columns=[],
-                rows=[],
-                row_count=0,
-                error=f"Database error: {e}"
-            )
+            return {"query": sql, "columns": [], "rows": [], "row_count": 0, "error": f"Database error: {e}"}
         except Exception as e:
             logger.exception("Unexpected error in SQLExecutor")
-            return SQLQueryResult(
-                query=sql,
-                columns=[],
-                rows=[],
-                row_count=0,
-                error=f"Unexpected error: {e}"
-            )
+            return {"query": sql, "columns": [], "rows": [], "row_count": 0, "error": f"Unexpected error: {e}"}

@@ -68,9 +68,7 @@ Examples:
 
 Environment Variables:
   OPENROUTER_API_KEY    OpenRouter API key (recommended)
-  OPENAI_API_KEY        Direct OpenAI API key
-  ANTHROPIC_API_KEY     Direct Anthropic API key
-"""
+	"""
     )
     
     parser.add_argument(
@@ -87,7 +85,7 @@ Environment Variables:
     
     parser.add_argument(
         "-p", "--provider",
-        choices=["auto", "openrouter", "openai", "anthropic", "none"],
+        choices=["auto", "openrouter", "none"],
         default="auto",
         help="LLM provider (default: auto-detect from env vars)"
     )
@@ -236,8 +234,9 @@ async def main():
             provider_name = llm_client.provider
     
     if not llm_client:
-        print_warning("No LLM configured - using heuristic mode")
-        console.print("[muted]Set OPENROUTER_API_KEY for full functionality[/muted]")
+        print_error("No OpenRouter LLM configured")
+        console.print("[muted]Set OPENROUTER_API_KEY or pass --provider openrouter[/muted]")
+        raise SystemExit(1)
     
     # Initialize agent
     agent = RAGAgent(llm_client=llm_client)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -111,18 +110,11 @@ class ColumnType(str, Enum):
     PERCENTAGE = "percentage"
 
 
-class TableColumn(BaseModel):
-    """A column in an extracted table."""
-    name: str = Field(..., description="Column name")
-    data_type: ColumnType = Field(default=ColumnType.TEXT)
-    description: str | None = Field(default=None)
-
-
 class TableSchema(BaseModel):
     """Schema for an extracted table."""
     table_name: str = Field(..., description="Unique table name")
     description: str = Field(..., description="What this table contains")
-    columns: list[TableColumn] = Field(default_factory=list)
+    columns: list[str] = Field(default_factory=list)
     source_document_id: str = Field(..., description="Document this came from")
     page_number: int | None = Field(default=None)
 
@@ -142,13 +134,6 @@ class ExtractedTable(BaseModel):
 # =============================================================================
 # Query/Response Models
 # =============================================================================
-
-class QueryType(str, Enum):
-    """Types of queries the system can handle."""
-    COMPUTATIONAL = "computational"  # Needs SQL + calculation
-    FACTUAL = "factual"              # Needs text retrieval
-    HYBRID = "hybrid"                # Needs both
-
 
 class Citation(BaseModel):
     """A citation to source material."""
@@ -207,25 +192,6 @@ class QueryResponse(BaseModel):
 
 
 # =============================================================================
-# SQL Query Models
-# =============================================================================
-
-class SQLQueryResult(BaseModel):
-    """Result from a SQL query."""
-    query: str = Field(..., description="The SQL query that was executed")
-    columns: list[str] = Field(default_factory=list)
-    rows: list[dict[str, Any]] = Field(default_factory=list)
-    row_count: int = Field(default=0)
-    error: str | None = Field(default=None, description="Error message if query failed")
-
-
-class VectorSearchResult(BaseModel):
-    """Result from vector search."""
-    chunks: list[TextChunk] = Field(default_factory=list)
-    scores: list[float] = Field(default_factory=list)
-
-
-# =============================================================================
 # Calculation Transparency Models
 # =============================================================================
 
@@ -276,195 +242,3 @@ class CalculationTranscript(BaseModel):
             return f"${value / 1_000:,.2f}K"
         else:
             return f"{value:,.2f}"
-
-
-# =============================================================================
-# Refusal Models (Audit Transparency)
-# =============================================================================
-
-class RefusalReason(str, Enum):
-    """Reasons for refusing to answer a query."""
-    DEFINITION_MISMATCH = "definition_mismatch"      # Comparing incompatible metric definitions
-    INSUFFICIENT_DATA = "insufficient_data"          # Required data not available
-    PERIOD_DISCONTINUITY = "period_discontinuity"    # Time periods don't align or have gaps
-    INCOMPARABLE_METRICS = "incomparable_metrics"    # Metrics from different standards (GAAP vs non-GAAP)
-    MISSING_CONTEXT = "missing_context"              # Can't determine what user is asking for
-
-
-class QueryRefusal(BaseModel):
-    """
-    Structured refusal with full explanation.
-    
-    Used when the system cannot reliably answer a query due to
-    data quality, comparability, or completeness concerns.
-    Treating refusal as a success mode improves trust.
-    """
-    reason: RefusalReason = Field(..., description="Category of refusal")
-    explanation: str = Field(..., description="Clear explanation of why the query cannot be answered")
-    what_was_found: str = Field(..., description="What data/context WAS successfully retrieved")
-    what_is_missing: list[str] = Field(default_factory=list, description="Specific missing elements")
-    suggested_alternatives: list[str] = Field(default_factory=list, description="Alternative queries that could work")
-    
-    def format_for_display(self) -> str:
-        """Format as a professional analyst-style refusal."""
-        lines = [
-            "**Unable to Complete Analysis**",
-            "",
-            f"**Reason:** {self.reason.value.replace('_', ' ').title()}",
-            "",
-            self.explanation,
-            "",
-            f"**What was found:** {self.what_was_found}",
-        ]
-        
-        if self.what_is_missing:
-            lines.append("")
-            lines.append("**Missing information:**")
-            for item in self.what_is_missing:
-                lines.append(f"  • {item}")
-        
-        if self.suggested_alternatives:
-            lines.append("")
-            lines.append("**Suggested alternatives:**")
-            for alt in self.suggested_alternatives:
-                lines.append(f"  • {alt}")
-        
-        return "\n".join(lines)
-
-
-# =============================================================================
-# Field Definition Models (Comparability Tracking)
-# =============================================================================
-
-class AccountingStandard(str, Enum):
-    """Accounting standards for financial data."""
-    GAAP = "gaap"
-    NON_GAAP = "non_gaap"
-    IFRS = "ifrs"
-    UNKNOWN = "unknown"
-
-
-class FieldDefinition(BaseModel):
-    """
-    Semantic definition of a data field for comparability checking.
-    
-    Tracks the meaning and context of a field to determine whether
-    it can be meaningfully compared with another field.
-    """
-    field_name: str = Field(..., description="Name of the field/column")
-    definition_hash: str = Field(..., description="SHA256 hash of canonical definition for quick matching")
-    
-    # Temporal context
-    fiscal_period: str | None = Field(default=None, description="Period covered, e.g., 'FY2024', 'Q3-2024'")
-    fiscal_year: int | None = Field(default=None, description="Fiscal year")
-    
-    # Accounting context
-    accounting_standard: AccountingStandard = Field(default=AccountingStandard.UNKNOWN)
-    
-    # Scope context
-    segment_scope: str | None = Field(default=None, description="Business segment, e.g., 'Consolidated', 'North America'")
-    currency: str | None = Field(default=None, description="Currency, e.g., 'USD', 'EUR'")
-    
-    # Definition details
-    definition_text: str | None = Field(default=None, description="Human-readable definition")
-    includes_items: list[str] = Field(default_factory=list, description="What is included")
-    excludes_items: list[str] = Field(default_factory=list, description="What is excluded, e.g., 'one-time items'")
-    
-    # Source tracking
-    source_document_id: str | None = Field(default=None)
-    source_table: str | None = Field(default=None)
-    
-    @classmethod
-    def compute_hash(cls, field_name: str, accounting_standard: str, segment_scope: str | None, 
-                     includes: list[str], excludes: list[str]) -> str:
-        """Compute a deterministic hash for field definition matching."""
-        canonical = f"{field_name.lower()}|{accounting_standard}|{segment_scope or ''}|{','.join(sorted(includes))}|{','.join(sorted(excludes))}"
-        return hashlib.sha256(canonical.encode()).hexdigest()[:16]
-
-
-class ComparabilityResult(BaseModel):
-    """
-    Result of comparing two field definitions.
-    
-    Used to determine if two metrics can be meaningfully compared
-    or computed together.
-    """
-    comparable: bool = Field(..., description="Whether the fields can be meaningfully compared")
-    confidence: float = Field(default=1.0, description="Confidence in the assessment (0.0 to 1.0)")
-    
-    # Analysis details
-    differences: list[str] = Field(default_factory=list, description="What differs between the fields")
-    warnings: list[str] = Field(default_factory=list, description="Potential issues to be aware of")
-    
-    # Recommendation
-    recommendation: str = Field(
-        default="Safe to compare",
-        description="Human-readable recommendation"
-    )
-    
-    @classmethod
-    def check_comparability(cls, field_a: FieldDefinition, field_b: FieldDefinition) -> "ComparabilityResult":
-        """
-        Compare two field definitions and determine if they are comparable.
-        
-        Checks:
-        - Accounting standard compatibility
-        - Currency matching
-        - Segment scope alignment
-        - Definition hash matching
-        """
-        differences: list[str] = []
-        warnings: list[str] = []
-        comparable = True
-        confidence = 1.0
-        
-        # Check accounting standard
-        if field_a.accounting_standard != field_b.accounting_standard:
-            if AccountingStandard.UNKNOWN not in (field_a.accounting_standard, field_b.accounting_standard):
-                differences.append(
-                    f"Accounting standards differ: {field_a.accounting_standard.value} vs {field_b.accounting_standard.value}"
-                )
-                comparable = False
-        
-        # Check currency
-        if field_a.currency and field_b.currency and field_a.currency != field_b.currency:
-            differences.append(f"Currencies differ: {field_a.currency} vs {field_b.currency}")
-            comparable = False
-        
-        # Check segment scope
-        if field_a.segment_scope and field_b.segment_scope:
-            if field_a.segment_scope.lower() != field_b.segment_scope.lower():
-                differences.append(
-                    f"Segment scopes differ: {field_a.segment_scope} vs {field_b.segment_scope}"
-                )
-                comparable = False
-        
-        # Check definition hash for exact semantic match
-        if field_a.definition_hash != field_b.definition_hash:
-            # Not an automatic fail, but note it
-            warnings.append("Field definitions may not be identical—verify semantic equivalence")
-            confidence = 0.7
-        
-        # Check excludes/includes for compatibility
-        if set(field_a.excludes_items) != set(field_b.excludes_items):
-            diff_a = set(field_a.excludes_items) - set(field_b.excludes_items)
-            diff_b = set(field_b.excludes_items) - set(field_a.excludes_items)
-            if diff_a or diff_b:
-                warnings.append("Different exclusions applied to metrics")
-                confidence = min(confidence, 0.6)
-        
-        # Build recommendation
-        if comparable and not warnings:
-            recommendation = "Safe to compare"
-        elif comparable and warnings:
-            recommendation = "Comparable with caveats—review warnings"
-        else:
-            recommendation = f"Not directly comparable: {'; '.join(differences)}"
-        
-        return cls(
-            comparable=comparable,
-            confidence=confidence,
-            differences=differences,
-            warnings=warnings,
-            recommendation=recommendation
-        )

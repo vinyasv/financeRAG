@@ -77,6 +77,11 @@ Examples:
         action="store_true",
         help="Disable progress bar"
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-ingest files even if existing document records are present"
+    )
     
     return parser.parse_args()
 
@@ -154,8 +159,11 @@ async def main():
     # Initialize LLM client
     llm_client = get_llm_client()
     
-    # Docling table extraction status
-    print_info("Table extraction: Docling (local, free)")
+    # Table extraction status
+    if llm_client:
+        print_info("Table extraction: VLM cloud, then Docling local fallback")
+    else:
+        print_info("Table extraction: Docling local, then rule-based fallback")
     console.print()
     
     # Initialize agent with LLM
@@ -194,7 +202,7 @@ async def main():
                 logger.info(f"Ingesting file: {path.name} ({path.stat().st_size / 1024 / 1024:.1f}MB)")
                 
                 try:
-                    result = await agent.ingest_document(path)
+                    result = await agent.ingest_document(path, force=args.force)
                     
                     # Handle both single doc (PDF) and list of docs (spreadsheet)
                     if isinstance(result, list):
@@ -225,7 +233,7 @@ async def main():
             console.print(f"[muted]Processing:[/muted] {path.name}")
             
             try:
-                result = await agent.ingest_document(path)
+                result = await agent.ingest_document(path, force=args.force)
                 
                 # Handle both single doc (PDF) and list of docs (spreadsheet)
                 if isinstance(result, list):

@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..common.ids import document_id_from_filename
-
 
 @dataclass
 class ParsedPage:
@@ -81,8 +79,8 @@ class PDFParser:
                 # Extract text
                 text = page.extract_text() or ""
                 
-                # Count lines on this page
-                line_count = text.count('\n') + 1 if text.strip() else 0
+                # Count actual extracted lines without overcounting trailing newlines.
+                line_count = len(text.splitlines()) if text.strip() else 0
                 
                 # Extract tables
                 tables = []
@@ -132,7 +130,3 @@ class PDFParser:
         
         return text
     
-    @staticmethod
-    def generate_document_id(filename: str) -> str:
-        """Generate a unique document ID from filename."""
-        return document_id_from_filename(filename)

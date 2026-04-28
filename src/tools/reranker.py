@@ -33,7 +33,7 @@ class Reranker:
             cache_dir = Path(tempfile.gettempdir()) / "flashrank"
             self._ranker = Ranker(model_name=self.model_name, cache_dir=str(cache_dir))
     
-    def rerank(
+    def _rerank(
         self,
         query: str,
         chunks: list[TextChunk],
@@ -101,7 +101,7 @@ class Reranker:
             return []
         
         # Get reranker scores for all chunks
-        reranked = self.rerank(query, chunks, top_k=len(chunks))
+        reranked = self._rerank(query, chunks, top_k=len(chunks))
         
         # Create mapping of chunk id to reranker score
         rerank_scores = {id(c): s for c, s in reranked}

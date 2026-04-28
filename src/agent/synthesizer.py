@@ -8,7 +8,6 @@ from ..models import (
     CalculationTranscript,
     Citation,
     ExecutionPlan,
-    QueryRefusal,
     QueryResponse,
     ToolName,
     ToolResult,
@@ -127,10 +126,9 @@ class ResponseSynthesizer:
         Returns:
             QueryResponse with synthesized answer
         """
-        if self.llm_client:
-            answer = await self._synthesize_with_llm(plan, results)
-        else:
-            answer = self._synthesize_with_template(plan, results)
+        if not self.llm_client:
+            raise RuntimeError("Response synthesis requires an LLM client")
+        answer = await self._synthesize_with_llm(plan, results)
         
         # Extract citations
         citations = self._extract_citations(results)
@@ -152,7 +150,7 @@ class ResponseSynthesizer:
         plan: ExecutionPlan,
         results: dict[str, ToolResult]
     ) -> str:
-        """Generate response using LLM with prompt injection protection."""
+        """Generate response using LLM with prompt-injection advisory wrapping."""
         # Format results
         results_parts = []
         for step in plan.steps:
@@ -174,48 +172,6 @@ class ResponseSynthesizer:
         
         return await self.llm_client.generate(prompt)
     
-    def _synthesize_with_template(
-        self,
-        plan: ExecutionPlan,
-        results: dict[str, ToolResult]
-    ) -> str:
-        """Generate response using templates (no LLM)."""
-        parts = []
-        
-        # Add data results
-        for step in plan.steps:
-            result = results.get(step.id)
-            if not result or not result.success:
-                continue
-            
-            if step.tool == ToolName.SQL_QUERY:
-                parts.append(f"**Data:** {self._format_result(result.result)}")
-            
-            elif step.tool == ToolName.CALCULATOR:
-                # Uses CalculationTranscript formatting if available
-                parts.append(f"**Calculation:**\n{self._format_result(result.result)}")
-            
-            elif step.tool == ToolName.VECTOR_SEARCH:
-                if isinstance(result.result, list) and result.result:
-                    context = result.result[0].get("content", "")[:500]
-                    parts.append(f"**Context:** {context}...")
-            
-            elif step.tool == ToolName.GET_DOCUMENT:
-                if isinstance(result.result, dict):
-                    content = result.result.get("content", "")[:500]
-                    parts.append(f"**Document content:** {content}...")
-        
-        # Check for errors
-        errors = [r for r in results.values() if not r.success]
-        if errors:
-            error_msgs = [f"{e.step_id}: {e.error}" for e in errors]
-            parts.append(f"\n**Note:** Some steps failed: {'; '.join(error_msgs)}")
-        
-        if not parts:
-            return "I couldn't find relevant information to answer your query."
-        
-        return "\n\n".join(parts)
-    
     def _format_result(self, result: Any) -> str:
         """Format a result for display."""
         if result is None:
@@ -223,10 +179,6 @@ class ResponseSynthesizer:
         
         # Handle CalculationTranscript with full audit transparency
         if isinstance(result, CalculationTranscript):
-            return result.format_for_display()
-        
-        # Handle QueryRefusal - treat refusal as a success mode
-        if isinstance(result, QueryRefusal):
             return result.format_for_display()
         
         if isinstance(result, (int, float)):
@@ -242,7 +194,7 @@ class ResponseSynthesizer:
             # Format dict nicely
             parts = []
             for k, v in result.items():
-                if k in ("columns", "row_count"):
+                if k in ("columns", "row_count") or k.startswith("__"):
                     continue
                 if isinstance(v, (int, float)):
                     parts.append(f"{k}: {v:,}")
@@ -301,6 +253,39 @@ class ResponseSynthesizer:
         """Extract citations from results."""
         citations = []
         seen_citations = set()  # Avoid duplicate citations
+
+        def add_citation(citation: Citation) -> None:
+            cite_key = (
+                citation.document_id,
+                citation.document_name,
+                citation.page_number,
+                citation.section,
+                citation.start_line,
+                citation.end_line,
+            )
+            if cite_key in seen_citations:
+                return
+            seen_citations.add(cite_key)
+            citations.append(citation)
+
+        def add_sql_citations(result_value: Any) -> None:
+            if not isinstance(result_value, dict):
+                return
+            provenance = result_value.get("__sql_provenance")
+            if not isinstance(provenance, dict):
+                return
+            for table in provenance.get("tables", []):
+                if not isinstance(table, dict):
+                    continue
+                doc_id = table.get("document_id") or "unknown"
+                table_name = table.get("table_name") or "unknown_table"
+                columns = table.get("columns") or []
+                add_citation(Citation(
+                    document_id=doc_id,
+                    document_name=self._resolve_document_name(doc_id),
+                    section=table_name,
+                    text_snippet=f"SQL table {table_name}; columns: {', '.join(columns[:10])}",
+                ))
         
         for result in results.values():
             if not result.success:
@@ -313,23 +298,13 @@ class ResponseSynthesizer:
                         if isinstance(item, dict):
                             doc_id = item.get("document_id", "unknown")
                             
-                            # Create a key to deduplicate
-                            cite_key = (
-                                doc_id,
-                                item.get("page_number"),
-                                item.get("start_line")
-                            )
-                            if cite_key in seen_citations:
-                                continue
-                            seen_citations.add(cite_key)
-                            
                             # Resolve document name from ID
                             doc_name = self._resolve_document_name(doc_id)
                             
                             snippet = item.get("content", "")[:200]
                             if len(item.get("content", "")) > 200:
                                 snippet += "..."
-                            citations.append(Citation(
+                            add_citation(Citation(
                                 document_id=doc_id,
                                 document_name=doc_name,
                                 page_number=item.get("page_number"),
@@ -338,13 +313,23 @@ class ResponseSynthesizer:
                                 end_line=item.get("end_line"),
                                 text_snippet=snippet
                             ))
-            
+
+            elif result.tool == ToolName.SQL_QUERY:
+                add_sql_citations(result.result)
+
+            elif result.tool == ToolName.CALCULATOR:
+                if isinstance(result.result, CalculationTranscript):
+                    for binding in result.result.bindings:
+                        source = results.get(binding.source_step)
+                        if source and source.tool == ToolName.SQL_QUERY:
+                            add_sql_citations(source.result)
+
             elif result.tool == ToolName.GET_DOCUMENT:
                 if isinstance(result.result, dict):
                     doc_id = result.result.get("document_id", "unknown")
                     doc_name = result.result.get("filename") or self._resolve_document_name(doc_id)
-                    
-                    citations.append(Citation(
+
+                    add_citation(Citation(
                         document_id=doc_id,
                         document_name=doc_name,
                         section=result.result.get("section")

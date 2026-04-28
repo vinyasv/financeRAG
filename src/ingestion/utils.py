@@ -1,15 +1,11 @@
 """Shared utilities for ingestion module."""
 
-from ..common.ids import chunk_id as generate_chunk_id
-from ..common.ids import table_id as generate_table_id
 from ..common.naming import normalize_column_name, sanitize_table_name
 from ..common.text_rendering import table_to_text
 
 __all__ = [
     "HEADER_ROW_MIN_FILL_RATIO",
     "HEADER_ROW_TEXT_RATIO",
-    "generate_chunk_id",
-    "generate_table_id",
     "is_numeric",
     "normalize_column_name",
     "parse_numeric",

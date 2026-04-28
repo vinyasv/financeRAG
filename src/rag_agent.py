@@ -12,6 +12,7 @@ from .common.ids import chunk_id, document_id_from_filename, sheet_document_id
 from .common.naming import sanitize_table_name
 from .config import config
 from .ingestion.chunker import SemanticChunker
+from .ingestion.exceptions import ExtractionFailed
 from .ingestion.pdf_parser import PDFParser
 from .ingestion.schema_detector import SchemaDetector
 from .ingestion.spreadsheet_parser import SpreadsheetParser
@@ -53,8 +54,8 @@ class RAGAgent:
         Initialize the RAG agent.
         
         Args:
-            llm_client: Optional LLM client for planning and synthesis.
-                       If None, uses heuristic-based fallbacks.
+            llm_client: Optional LLM client for ingestion helpers.
+                       Querying requires an LLM client.
         """
         self.llm_client = llm_client
         
@@ -81,7 +82,11 @@ class RAGAgent:
         self.get_document = GetDocumentTool(document_store=self.document_store)
         
         # Initialize agent components
-        self.planner = Planner(llm_client=llm_client, sqlite_store=self.sqlite_store)
+        self.planner = Planner(
+            llm_client=llm_client,
+            sqlite_store=self.sqlite_store,
+            company_registry=self.schema_cluster_manager.company_registry,
+        )
         self.executor = DAGExecutor(
             calculator=self.calculator,
             sql_query=self.sql_query,
@@ -112,12 +117,17 @@ class RAGAgent:
         full_text: str,
         kind: str,
         display_name: str,
+        force: bool = False,
+        requires_table: bool = False,
     ) -> tuple[Document, bool]:
         """Load an existing document or create and persist it."""
         existing_doc = self.sqlite_store.get_document(doc_id)
-        if existing_doc:
+        if existing_doc and not force and self._document_ingestion_complete(doc_id, requires_table=requires_table):
             logger.info(f"{kind} already ingested: {display_name} (id={doc_id}), skipping")
             return existing_doc, False
+        if existing_doc:
+            logger.info(f"{kind} requires re-ingestion: {display_name} (id={doc_id})")
+            self.chroma_store.delete_document_chunks(doc_id)
 
         document = Document(
             id=doc_id,
@@ -128,6 +138,16 @@ class RAGAgent:
         )
         self._persist_document_payload(document, source_path=source_path, full_text=full_text)
         return document, True
+
+    def _document_ingestion_complete(self, doc_id: str, *, requires_table: bool) -> bool:
+        """Return whether all persisted surfaces exist for a document."""
+        if not self.document_store.get_full_text(doc_id):
+            return False
+        if self.chroma_store.count(document_id=doc_id) < 1:
+            return False
+        if requires_table and not self.sqlite_store.list_tables(document_id=doc_id):
+            return False
+        return True
 
     def _persist_document_payload(
         self,
@@ -183,14 +203,14 @@ class RAGAgent:
             try:
                 logger.info("Using VLM Table Extractor (Cloud)")
                 tables = await self.vlm_extractor.extract_tables_from_pdf(pdf_path, doc_id)
-            except Exception as exc:
+            except ExtractionFailed as exc:
                 logger.warning(f"VLM extraction failed: {exc}, falling back to Docling")
 
         if not tables:
             try:
                 logger.info("Using Docling for table extraction (Local Fast Mode)")
                 tables = await self.docling_extractor.extract_tables_from_pdf(pdf_path, doc_id)
-            except Exception as exc:
+            except ExtractionFailed as exc:
                 logger.warning(f"Docling extraction failed: {exc}, falling back to rule-based")
                 tables = []
 
@@ -284,26 +304,47 @@ class RAGAgent:
             source_document=source_document,
         )
 
-    def _build_spreadsheet_chunk(self, doc_id: str, sheet) -> TextChunk:
-        """Create the canonical vector-search chunk for a spreadsheet sheet."""
-        sample_rows = min(self.SPREADSHEET_SAMPLE_ROWS, sheet.row_count)
-        return TextChunk(
-            id=chunk_id(doc_id, 0),
-            document_id=doc_id,
-            content=sheet.raw_text,
-            page_number=None,
-            section_title=sheet.sheet_name,
-            chunk_index=0,
-            start_line=1,
-            end_line=sample_rows,
-            metadata={
-                "source_type": "spreadsheet",
-                "total_rows": sheet.row_count,
-                "columns": sheet.headers[:5],
-            },
-        )
+    def _build_spreadsheet_chunks(self, doc_id: str, sheet, rows_per_chunk: int = 100) -> list[TextChunk]:
+        """Create row-window vector-search chunks for a spreadsheet sheet."""
+        chunks: list[TextChunk] = []
+        headers = sheet.headers
+        for start in range(0, sheet.row_count, rows_per_chunk):
+            end = min(start + rows_per_chunk, sheet.row_count)
+            rows = sheet.rows[start:end]
+            lines = [
+                f"Spreadsheet Sheet: {sheet.sheet_name}",
+                f"Rows: {start + 1}-{end} of {sheet.row_count}",
+                f"Columns: {', '.join(headers)}",
+                "",
+            ]
+            for row_number, row in enumerate(rows, start=start + 1):
+                row_values = [
+                    f"{header}: {row.get(header)}"
+                    for header in headers
+                    if row.get(header) is not None
+                ]
+                if row_values:
+                    lines.append(f"Row {row_number}: {' | '.join(row_values)}")
+
+            chunk_index = len(chunks)
+            chunks.append(TextChunk(
+                id=chunk_id(doc_id, chunk_index),
+                document_id=doc_id,
+                content="\n".join(lines),
+                page_number=None,
+                section_title=sheet.sheet_name,
+                chunk_index=chunk_index,
+                start_line=start + 1,
+                end_line=end,
+                metadata={
+                    "source_type": "spreadsheet",
+                    "total_rows": sheet.row_count,
+                    "columns": headers[:5],
+                },
+            ))
+        return chunks
     
-    async def ingest_document(self, file_path: Path) -> Document | list[Document]:
+    async def ingest_document(self, file_path: Path, force: bool = False) -> Document | list[Document]:
         """
         Ingest a document (PDF or spreadsheet).
         
@@ -329,11 +370,11 @@ class RAGAgent:
             )
         
         if ext == '.pdf':
-            return await self._ingest_pdf(file_path)
+            return await self._ingest_pdf(file_path, force=force)
         else:
-            return await self._ingest_spreadsheet(file_path)
+            return await self._ingest_spreadsheet(file_path, force=force)
     
-    async def _ingest_pdf(self, pdf_path: Path) -> Document:
+    async def _ingest_pdf(self, pdf_path: Path, force: bool = False) -> Document:
         """
         Ingest a PDF document.
         
@@ -362,6 +403,8 @@ class RAGAgent:
             full_text=parsed.full_text,
             kind="Document",
             display_name=pdf_path.name,
+            force=force,
+            requires_table=False,
         )
         if not created:
             return document
@@ -378,7 +421,7 @@ class RAGAgent:
 
         return document
     
-    async def _ingest_spreadsheet(self, file_path: Path) -> list[Document]:
+    async def _ingest_spreadsheet(self, file_path: Path, force: bool = False) -> list[Document]:
         """
         Ingest a spreadsheet file (Excel or CSV).
         
@@ -416,6 +459,8 @@ class RAGAgent:
                 full_text=sheet.raw_text,
                 kind="Sheet",
                 display_name=sheet.sheet_name,
+                force=force,
+                requires_table=True,
             )
             if not created:
                 documents.append(document)
@@ -428,7 +473,7 @@ class RAGAgent:
                 sheet=sheet,
                 table_name=table_name,
             )
-            self._index_chunk_batch([self._build_spreadsheet_chunk(doc_id, sheet)])
+            self._index_chunk_batch(self._build_spreadsheet_chunks(doc_id, sheet))
 
             documents.append(document)
             logger.debug(f"Sheet '{sheet.sheet_name}': {sheet.row_count} rows, {sheet.col_count} cols -> table '{table_name}'")
@@ -449,6 +494,9 @@ class RAGAgent:
             QueryResponse with answer and citations
         """
         # Get available data for planning
+        if not self.llm_client:
+            raise RuntimeError("Querying requires an LLM client. Configure OPENROUTER_API_KEY.")
+
         tables = self.sqlite_store.list_tables()
         table_names = [t.table_name for t in tables]
         
@@ -538,9 +586,3 @@ async def query_documents(query: str, llm_client: Any = None) -> str:
     agent = RAGAgent(llm_client=llm_client)
     response = await agent.query(query)
     return response.answer
-
-
-# Run query from sync context
-def query_sync(query: str, llm_client: Any = None) -> str:
-    """Synchronous wrapper for query_documents."""
-    return asyncio.run(query_documents(query, llm_client))

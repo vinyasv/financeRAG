@@ -94,10 +94,6 @@ class ChromaStore:
     # Storage Operations
     # =========================================================================
     
-    def add_chunk(self, chunk: TextChunk) -> None:
-        """Add a single text chunk."""
-        self.add_chunks([chunk])
-    
     def add_chunks(self, chunks: list[TextChunk]) -> None:
         """Add multiple text chunks."""
         self._ensure_initialized()
@@ -109,13 +105,13 @@ class ChromaStore:
         documents = [chunk.content for chunk in chunks]
         metadatas = [
             {
+                **{k: str(v) for k, v in chunk.metadata.items()},
                 "document_id": chunk.document_id,
                 "page_number": chunk.page_number or 0,
                 "section_title": chunk.section_title or "",
                 "chunk_index": chunk.chunk_index,
                 "start_line": chunk.start_line or 0,
                 "end_line": chunk.end_line or 0,
-                **{k: str(v) for k, v in chunk.metadata.items()}
             }
             for chunk in chunks
         ]
@@ -125,11 +121,6 @@ class ChromaStore:
             documents=documents,
             metadatas=metadatas
         )
-    
-    def delete_chunks(self, chunk_ids: list[str]) -> None:
-        """Delete chunks by ID."""
-        self._ensure_initialized()
-        self._collection.delete(ids=chunk_ids)
     
     def delete_document_chunks(self, document_id: str) -> None:
         """Delete all chunks for a document."""
@@ -231,16 +222,11 @@ class ChromaStore:
             end_line=int(metadata.get("end_line", 0)) or None
         )
     
-    def count(self) -> int:
+    def count(self, document_id: str | None = None) -> int:
         """Get total number of chunks stored."""
         self._ensure_initialized()
+        if document_id:
+            results = self._collection.get(where={"document_id": document_id})
+            return len(results.get("ids", []))
         return self._collection.count()
     
-    # =========================================================================
-    # Utility
-    # =========================================================================
-    
-    @staticmethod
-    def generate_chunk_id(document_id: str, chunk_index: int) -> str:
-        """Generate a unique chunk ID."""
-        return chunk_id(document_id, chunk_index)
