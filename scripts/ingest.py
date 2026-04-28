@@ -163,7 +163,7 @@ async def main():
     if llm_client:
         print_info("Table extraction: VLM cloud, then Docling local fallback")
     else:
-        print_info("Table extraction: Docling local, then rule-based fallback")
+        print_info("Table extraction: Docling local")
     console.print()
     
     # Initialize agent with LLM

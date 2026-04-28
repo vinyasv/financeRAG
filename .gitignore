@@ -20,6 +20,9 @@ data/
 *.xls
 
 # Evaluation results
+EVALUATION.md
+CLAUDE.md
+.claude/
 *_results.json
 *_results.md
 *_review.md

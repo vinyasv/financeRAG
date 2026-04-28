@@ -70,6 +70,7 @@ class SemanticChunker:
             current_chunk_text = ""
             current_section = None
             chunk_start_line = page_start_line
+            chunk_end_line = page_start_line
             
             for para, para_start_offset, para_end_offset in paragraphs:
                 para_start_line = page_start_line + para_start_offset
@@ -102,7 +103,6 @@ class SemanticChunker:
                 if word_count > self.config.max_words:
                     # Save current chunk
                     if current_chunk_text.strip():
-                        chunk_end_line = max(chunk_start_line, para_start_line - 1)
                         chunks.append(self._create_chunk(
                             document_id=document_id,
                             content=current_chunk_text.strip(),
@@ -110,43 +110,45 @@ class SemanticChunker:
                             section_title=current_section,
                             chunk_index=chunk_index,
                             start_line=chunk_start_line,
-                            end_line=chunk_end_line
+                            end_line=max(chunk_start_line, chunk_end_line)
                         ))
                         chunk_index += 1
                     
                     # Handle large paragraph
                     if len(para.split()) > self.config.max_words:
                         # Split paragraph into sentences
-                        para_chunks = self._split_large_text(para)
-                        para_line_count = max(1, para_end_offset - para_start_offset + 1)
-                        lines_per_chunk = max(1, para_line_count // len(para_chunks))
-                        chunk_line = para_start_line
-                        
-                        for para_chunk in para_chunks:
+                        para_chunks = self._split_large_text_with_line_ranges(
+                            para,
+                            para_start_line,
+                            para_end_line,
+                        )
+
+                        for para_chunk, split_start_line, split_end_line in para_chunks:
                             chunks.append(self._create_chunk(
                                 document_id=document_id,
                                 content=para_chunk.strip(),
                                 page_number=page.page_number,
                                 section_title=current_section,
                                 chunk_index=chunk_index,
-                                start_line=chunk_line,
-                                end_line=chunk_line + lines_per_chunk - 1
+                                start_line=split_start_line,
+                                end_line=split_end_line,
                             ))
                             chunk_index += 1
-                            chunk_line += lines_per_chunk
                         current_chunk_text = ""
                         chunk_start_line = para_end_line + 1
+                        chunk_end_line = para_end_line
                     else:
                         # Start new chunk with overlap
                         overlap = self._get_overlap(current_chunk_text)
                         current_chunk_text = overlap + " " + para if overlap else para
-                        chunk_start_line = para_start_line
+                        chunk_start_line = max(page_start_line, chunk_end_line) if overlap else para_start_line
+                        chunk_end_line = para_end_line
                 else:
                     # Add to current chunk
                     current_chunk_text = current_chunk_text + "\n\n" + para if current_chunk_text else para
+                    chunk_end_line = para_end_line
             # Save remaining chunk for this page
             if current_chunk_text.strip():
-                chunk_end_line = page_start_line + page.line_count - 1
                 chunks.append(self._create_chunk(
                     document_id=document_id,
                     content=current_chunk_text.strip(),
@@ -154,7 +156,7 @@ class SemanticChunker:
                     section_title=current_section,
                     chunk_index=chunk_index,
                     start_line=chunk_start_line,
-                    end_line=chunk_end_line
+                    end_line=max(chunk_start_line, chunk_end_line)
                 ))
                 chunk_index += 1
         
@@ -219,6 +221,25 @@ class SemanticChunker:
             chunks.append(current_chunk)
         
         return chunks
+
+    def _split_large_text_with_line_ranges(
+        self,
+        text: str,
+        start_line: int,
+        end_line: int,
+    ) -> list[tuple[str, int, int]]:
+        """Split large text and distribute source line ranges across chunks."""
+        chunks = self._split_large_text(text)
+        if not chunks:
+            return []
+
+        total_lines = max(1, end_line - start_line + 1)
+        ranged_chunks = []
+        for index, chunk in enumerate(chunks):
+            split_start = start_line + (index * total_lines) // len(chunks)
+            split_end = start_line + ((index + 1) * total_lines) // len(chunks) - 1
+            ranged_chunks.append((chunk, split_start, max(split_start, split_end)))
+        return ranged_chunks
     
     def _split_into_sentences(self, text: str) -> list[str]:
         """Split text into sentences."""
@@ -228,6 +249,9 @@ class SemanticChunker:
     
     def _get_overlap(self, text: str) -> str:
         """Get overlap text from the end of a chunk."""
+        if self.config.overlap_words <= 0:
+            return ""
+
         words = text.split()
         if len(words) <= self.config.overlap_words:
             return text

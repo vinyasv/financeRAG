@@ -150,7 +150,7 @@ class ResponseSynthesizer:
         plan: ExecutionPlan,
         results: dict[str, ToolResult]
     ) -> str:
-        """Generate response using LLM with prompt-injection advisory wrapping."""
+        """Generate response using LLM with suspicious-input advisory wrapping."""
         # Format results
         results_parts = []
         for step in plan.steps:

@@ -247,11 +247,12 @@ class Planner:
         available_tables: list[str] | None,
         available_documents: list[str] | None
     ) -> ExecutionPlan:
-        """Create plan using LLM with prompt-injection advisory wrapping."""
-        # Check for potential injection attempts (log but don't block)
+        """Create plan using LLM with suspicious-input advisory wrapping."""
+        # Suspicious-input telemetry is advisory only; prompt wrapping carries
+        # the actual boundary between instructions and untrusted user text.
         is_suspicious, patterns = detect_injection_attempt(query)
         if is_suspicious:
-            logger.warning(f"Potential prompt injection detected. Patterns: {patterns}")
+            logger.warning(f"Suspicious input advisory matched patterns: {patterns}")
         
         wrapped_query = prepare_prompt_user_content(query, "user_query")
         

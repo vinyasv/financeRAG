@@ -47,6 +47,15 @@ class TestScriptBootstrap:
         assert 'configure_cli_logging("ingest.log")' in ingest_source
         assert 'configure_cli_logging("query.log")' in query_source
 
+    def test_ingest_status_does_not_advertise_removed_rule_based_fallback(self):
+        """The ingestion CLI should describe the supported VLM/Docling chain."""
+        repo_root = Path(__file__).parent.parent
+        ingest_source = (repo_root / "scripts" / "ingest.py").read_text(encoding="utf-8")
+
+        assert "rule-based fallback" not in ingest_source
+        assert "Table extraction: VLM cloud, then Docling local fallback" in ingest_source
+        assert "Table extraction: Docling local" in ingest_source
+
 
 class TestCliCommon:
     """Shared CLI helpers should handle logging and exports."""

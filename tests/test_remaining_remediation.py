@@ -24,7 +24,6 @@ def test_pdf_table_fallback_distinguishes_empty_from_failure(monkeypatch):
     agent = RAGAgent.__new__(RAGAgent)
     agent.vlm_extractor = SimpleNamespace(extract_tables_from_pdf=AsyncMock(return_value=[]))
     agent.docling_extractor = SimpleNamespace(extract_tables_from_pdf=AsyncMock(return_value=["docling"]))
-    agent.table_extractor = SimpleNamespace(extract_tables=MagicMock(return_value=["rule"]))
 
     result = asyncio.run(agent._extract_pdf_tables(object(), MagicMock(name="report.pdf"), "doc"))
 
@@ -36,8 +35,8 @@ def test_pdf_table_fallback_distinguishes_empty_from_failure(monkeypatch):
 
     result = asyncio.run(agent._extract_pdf_tables(object(), MagicMock(name="report.pdf"), "doc"))
 
-    assert result == ["rule"]
-    agent.table_extractor.extract_tables.assert_called_once()
+    assert result == []
+    assert not hasattr(agent, "table_extractor")
 
 
 def test_planner_rejects_no_llm_and_falls_back_on_invalid_plan():

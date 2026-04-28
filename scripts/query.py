@@ -47,7 +47,7 @@ def validate_query_input(query: str) -> tuple[bool, str]:
     """
     is_valid, error_msg, suspicious_patterns = validate_query(query)
     if suspicious_patterns:
-        logger.warning(f"Potential injection attempt detected. Query length: {len(query)}")
+        logger.warning(f"Suspicious input advisory matched. Query length: {len(query)}")
     return is_valid, error_msg
 
 

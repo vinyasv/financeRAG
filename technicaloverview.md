@@ -63,20 +63,16 @@ flowchart TB
         CalcTool[Calculator]
         DocTool[Get Document]
         Reranker[FlashRank Reranker]
-        Comparability[Comparability\nChecker]
     end
 
-    subgraph LLM["☁️ LLM Providers"]
+    subgraph LLM["☁️ LLM Provider"]
         OpenRouter[OpenRouter]
-        OpenAI[OpenAI]
-        Anthropic[Anthropic]
     end
 
     PDF --> Parser
     XLSX --> Parser
     Parser --> VLM
     VLM -.->|Fallback| Docling
-    Docling -.->|Fallback| RuleBased
     VLM --> SchemaDet
     Docling --> SchemaDet
     RuleBased --> SchemaDet
@@ -163,13 +159,12 @@ class Planner:
     ) -> ExecutionPlan
 ```
 
-**Three Planning Paths:**
+**Planning Paths:**
 
 | Path | When Used | Description |
 |------|-----------|-------------|
 | **Fast-path** | Simple single-entity queries | `_create_fast_plan()` — parallel vector_search + optional SQL |
 | **LLM planning** | Complex queries (comparisons, calculations, multi-company) | `_plan_with_llm()` — full DAG with dependencies |
-| **Heuristics** | No LLM available | `_create_heuristic_plan()` — rule-based fallback |
 
 **Complexity Detection (`_is_simple_query()`):**
 - Uses `CompanyRegistry` for dynamic company detection
@@ -184,8 +179,8 @@ class Planner:
 - Arithmetic prohibition enforcement
 
 **Security Integration:**
-- `detect_injection_attempt()` called with logging before LLM planning
-- `sanitize_user_input()` and `wrap_user_content()` applied to query
+- `detect_injection_attempt()` called as suspicious-input advisory telemetry before LLM planning
+- `prepare_prompt_user_content()` wraps untrusted query text before it enters the prompt
 
 **Output Structure:**
 ```json
@@ -250,22 +245,12 @@ class Tool(ABC):
 - 10 operators in `SAFE_OPERATORS` dict (add, sub, mul, div, floordiv, mod, pow, usub, uadd, bitxor)
 - `_resolve_references_with_bindings()` returns `(resolved_expr, bindings_list)`
 - `_infer_formula_description()` detects "Difference", "Margin Calculation", "Percentage", etc.
-- `ComparabilityError` exception with `to_refusal()` method → converts to structured `QueryRefusal`
 - `calculate()` async convenience function
 
 **Get Document Tool (`src/tools/get_document.py`):**
 - Document ID validation: `VALID_DOC_ID_PATTERN = r'^[a-zA-Z0-9_-]+$'`
 - Section retrieval via `"doc_id:section_name"` format
 - `list_documents()` method for metadata summaries
-
-**Comparability Checker (`src/tools/comparability.py`):**
-- `check_field_comparability(field_a, field_b)` → `ComparabilityResult`
-- `create_comparability_refusal(result)` → `QueryRefusal`
-- `validate_operands_comparable(operands)` → pairwise checking for first incompatibility
-- Checks: accounting standard, currency, segment scope, definition similarity
-- Confidence scoring: ≥0.8 comparable, 0.5–0.8 with warnings, <0.5 refuses
-
----
 
 ### 4. Response Synthesizer (`src/agent/synthesizer.py`)
 
@@ -416,7 +401,7 @@ sequenceDiagram
     participant User
     participant RAGAgent
     participant Parser
-    participant TableExtractor
+    participant Extractors
     participant SchemaDetector
     participant TemporalEx
     participant Chunker
@@ -432,9 +417,9 @@ sequenceDiagram
     RAGAgent->>TemporalEx: extract_temporal_metadata(filename)
     TemporalEx-->>RAGAgent: TemporalMetadata
 
-    RAGAgent->>TableExtractor: extract_tables(document)
-    Note over TableExtractor: VLM → Docling → Rule-based
-    TableExtractor-->>RAGAgent: List[ExtractedTable]
+    RAGAgent->>Extractors: extract_tables(document)
+    Note over Extractors: VLM → Docling
+    Extractors-->>RAGAgent: List[ExtractedTable]
 
     RAGAgent->>SchemaDetector: enhance_schema(tables)
     Note over SchemaDetector: Semaphore(10) concurrency
@@ -667,11 +652,6 @@ flowchart TD
 - Image generation: disabled for optimization
 - Runs entirely locally — no API calls
 
-**Rule-Based Extractor (`src/ingestion/table_extractor.py`):**
-- Regex-based tabular pattern detection
-- Parses aligned whitespace and delimiters
-- Always available — no external dependencies
-
 ### PDF Parsing (`src/ingestion/pdf_parser.py`)
 
 ```python
@@ -791,12 +771,12 @@ flowchart LR
 
 | Control | Location | Protection | Details |
 |---------|----------|------------|---------|
-| Query length limit | `security.py` | Resource exhaustion | `MAX_QUERY_LENGTH = 5000` |
-| Prompt content limit | `security.py` | Resource exhaustion | `MAX_PROMPT_CONTENT_LENGTH = 50000` |
+| Query length limit | `validation.py` | Resource exhaustion | `MAX_QUERY_LENGTH = 5000` |
+| Prompt content limit | `common/prompts.py` | Resource exhaustion | `MAX_PROMPT_CONTENT_LENGTH = 50000` |
 | File size limit | `ingest.py` | Resource exhaustion | `MAX_FILE_SIZE_MB = 500` |
-| Injection detection | `security.py` | Prompt injection | 16 regex patterns, logged not blocked |
-| Input sanitization | `security.py` | Prompt injection | Escapes `{}`→`{{}}`, removes control chars (except `\n`, `\t`) |
-| Content wrapping | `security.py` | Prompt injection | `wrap_user_content(content, label)` with clear delimiters |
+| Suspicious input advisory | `validation.py` | Prompt-pattern telemetry | Regex patterns, logged not blocked |
+| Input sanitization | `common/prompts.py` | Prompt injection | Escapes `{}`→`{{}}`, removes control chars (except `\n`, `\t`) |
+| Content wrapping | `common/prompts.py` | Prompt injection | `wrap_user_content(content, label)` with clear delimiters |
 | SQL validation | `sqlite_store.py` | SQL injection | SELECT-only, 18 forbidden keywords, word-boundary regex |
 | Statement separation | `sqlite_store.py` | SQL injection | `;` blocked, `--` and `/*` blocked |
 | Auto LIMIT | `sqlite_store.py` | DoS | `MAX_SQL_RESULT_ROWS = 10000` |
@@ -933,19 +913,15 @@ Rich library-based terminal UI with custom theme:
 ### Environment Variables
 
 ```bash
-# LLM Providers (at least one required)
+# LLM Provider
 OPENROUTER_API_KEY=sk-or-...       # Recommended: single key for all models
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
 
 # Model Selection
 LLM_MODEL=google/gemini-3-flash-preview      # Default LLM model
-VISION_MODEL=google/gemini-2.5-flash-lite     # VLM table extraction model
 EMBEDDING_MODEL=qwen/qwen3-embedding-8b       # Embedding model
 
-# Feature Flags
-USE_VISION_TABLES=true                        # Enable VLM table extraction
-EMBEDDING_PROVIDER=auto                       # auto, openrouter, local
+# Embeddings
+EMBEDDING_PROVIDER=local                      # auto, openrouter, local
 ```
 
 ### Configuration Class (`src/config.py`)
@@ -964,12 +940,11 @@ class Config:
     # Models
     llm_model: str = "google/gemini-3-flash-preview"
     embedding_model: str = "qwen/qwen3-embedding-8b"
-    embedding_provider: str = "auto"
+    embedding_provider: str = "local"
 
     # Features
     use_reranking: bool = True
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    use_vision_tables: bool = True
 
     # Chunking
     chunk_size: int = 500
@@ -978,10 +953,6 @@ class Config:
     # Security (properties, not stored in fields)
     @property
     def openrouter_api_key(self) -> str | None
-    @property
-    def openai_api_key(self) -> str | None
-    @property
-    def anthropic_api_key(self) -> str | None
 ```
 
 - `_load_dotenv()` function for `.env` file loading
@@ -990,7 +961,7 @@ class Config:
 
 ### LLM Model Registry (`src/llm_client.py`)
 
-**Auto-detection:** Tries OpenRouter → OpenAI → Anthropic, uses first with valid key.
+**Auto-detection:** Uses OpenRouter when `OPENROUTER_API_KEY` is configured; otherwise query mode fails fast.
 
 **Vision support:** `generate_with_image()` method with base64 image encoding.
 
@@ -1099,21 +1070,20 @@ FinanceRAG/
 ├── src/
 │   ├── __init__.py
 │   ├── config.py              # Configuration management, dotenv loading
-│   ├── security.py            # 16-pattern injection detection, sanitization
-│   ├── models.py              # 60+ Pydantic models (v2)
-│   ├── llm_client.py          # Multi-provider LLM abstraction, model registry
+│   ├── validation.py          # Query and file validation policies
+│   ├── models.py              # Pydantic models (v2)
+│   ├── llm_client.py          # OpenRouter client abstraction, model registry
 │   ├── embeddings.py          # Embedding generation, ChromaEmbeddingFunction
 │   ├── rag_agent.py           # Main orchestrator, schema clustering integration
 │   ├── agent/
-│   │   ├── planner.py         # Query planning (LLM, heuristic, fast-path)
+│   │   ├── planner.py         # Query planning (LLM + fast-path)
 │   │   ├── executor.py        # Parallel DAG execution, ExecutionMonitor
 │   │   └── synthesizer.py     # Response synthesis (LLM + template modes)
 │   ├── tools/
 │   │   ├── base.py            # Tool ABC with run() timing wrapper
 │   │   ├── sql_query.py       # NL-to-SQL with schema clustering context
 │   │   ├── vector_search.py   # Semantic search with lazy reranking
-│   │   ├── calculator.py      # AST-based math, ComparabilityError, audit transcripts
-│   │   ├── comparability.py   # Field comparability checking, pairwise validation
+│   │   ├── calculator.py      # AST-based math with audit transcripts
 │   │   ├── reranker.py        # FlashRank cross-encoder reranking
 │   │   └── get_document.py    # Document retrieval with ID validation
 │   ├── storage/
@@ -1124,7 +1094,6 @@ FinanceRAG/
 │   ├── ingestion/
 │   │   ├── pdf_parser.py      # PDF parsing (pdfplumber, lazy-loaded)
 │   │   ├── spreadsheet_parser.py  # Excel/CSV with native DataFrames
-│   │   ├── table_extractor.py # Rule-based regex fallback
 │   │   ├── vision_table_extractor.py  # Docling TableFormer (local, FAST mode)
 │   │   ├── vlm_extractor.py   # VLM cloud extraction (Gemini 2.5 Flash Lite)
 │   │   ├── chunker.py         # Semantic chunking (500 tokens, 50 overlap)
@@ -1169,7 +1138,7 @@ FinanceRAG/
 ## Dependencies
 
 ### Core
-- `pydantic` (>=2.0.0) — Data validation, 60+ models
+- `pydantic` (>=2.0.0) — Data validation models
 - `pydantic-ai` (>=0.0.12) — AI integration patterns
 - `chromadb` (>=0.4.0) — Vector database with HNSW tuning
 - `sentence-transformers` (>=2.2.0) — Local embeddings (`BAAI/bge-small-en-v1.5`)
@@ -1183,9 +1152,8 @@ FinanceRAG/
 - `docling` (>=2.66.0) — IBM TableFormer local table extraction
 
 ### LLM Integration
-- `openai` (>=1.0.0) — OpenAI/OpenRouter client
-- `anthropic` (>=0.18.0) — Claude client
-- `aiohttp` (>=3.9.0) — Async HTTP for LLM calls
+- `openai` (>=1.0.0) — OpenAI-compatible client used for OpenRouter
+- `aiohttp` (>=3.9.0) — Async HTTP for ingestion/VLM calls
 
 ### Retrieval & Ranking
 - `flashrank` (>=0.2.0) — Cross-encoder reranking (~25% precision improvement)

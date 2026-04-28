@@ -166,7 +166,7 @@ FinanceRAG solves all of these.
 │                    Cross-Cutting Concerns                       │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────────┐  │
 │  │ Security │  │  Config  │  │  Models  │  │  LLM Client    │  │
-│  │          │  │          │  │ (Pydantic)│  │ (Multi-provider│  │
+│  │          │  │          │  │ (Pydantic)│  │ (OpenRouter)   │  │
 │  └──────────┘  └──────────┘  └──────────┘  └────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -280,16 +280,7 @@ Natural Language Query
   - Associate each table with its page number
   - Runs entirely locally — no API calls
 - **Dependencies:** `docling>=2.66.0`
-- **Fallback:** If Docling fails, fall through to rule-based
-
-#### FR-ING-04: Rule-Based Table Extraction (Fallback)
-- **Module:** `src/ingestion/table_extractor.py`
-- **Description:** Regex-based heuristic table detection as a last resort.
-- **Inputs:** Raw text per page
-- **Outputs:** `List[ExtractedTable]`
-- **Behavior:**
-  - Detect tabular patterns using regex (aligned whitespace, delimiters)
-  - Parse headers and data rows
+- **Fallback:** If Docling fails, continue ingestion without PDF tables and preserve text chunks
   - Basic but always available — no external dependencies
 - **Dependencies:** None (stdlib only)
 
@@ -664,34 +655,13 @@ Natural Language Query
 - **Output:** `ToolResult` containing full text content + metadata
 - **Use case:** When synthesis needs more context than chunks provide
 
-#### FR-TOOL-05: Comparability Checker
-- **Module:** `src/tools/comparability.py`
-- **Description:** Check whether two financial fields are semantically comparable.
-- **Inputs:** Two `FieldDefinition` objects
-- **Output:** `ComparabilityResult` with confidence score and warnings
-- **Checks:**
-  - Accounting standard match (GAAP vs non-GAAP vs IFRS)
-  - Currency match
-  - Segment scope match (company-wide vs segment-level)
-  - Definition semantic similarity
-- **Confidence:** 0.0–1.0 score
-- **Behavior:**
-  - `confidence >= 0.8` → comparable
-  - `0.5 <= confidence < 0.8` → comparable with warnings
-  - `confidence < 0.5` → not comparable → triggers `QueryRefusal`
-
----
-
 ### 6.5 LLM Integration
 
-#### FR-LLM-01: Multi-Provider Client
+#### FR-LLM-01: OpenRouter LLM Client
 - **Module:** `src/llm_client.py`
-- **Description:** Unified LLM client abstracting over multiple providers.
-- **Providers (in priority order):**
-  1. **OpenRouter** — Single API key for all models (recommended)
-  2. **OpenAI** — Direct API access
-  3. **Anthropic** — Direct API access
-- **Auto-Detection:** Try providers in order; use first one with valid API key
+- **Description:** LLM client backed by OpenRouter model routing.
+- **Provider:** OpenRouter — single API key for model aliases.
+- **Auto-Detection:** Use OpenRouter when `OPENROUTER_API_KEY` is configured; otherwise query mode fails fast.
 - **Interface:**
   ```python
   class LLMClient:
@@ -739,9 +709,9 @@ Natural Language Query
 
 ### 6.6 Security Layer
 
-#### FR-SEC-01: Prompt Injection Defense
-- **Module:** `src/security.py`
-- **Description:** Detect and neutralize prompt injection attempts in user input.
+#### FR-SEC-01: Suspicious Prompt-Pattern Advisory
+- **Module:** `src/validation.py`, `src/common/prompts.py`
+- **Description:** Log suspicious prompt-like patterns and wrap untrusted user input before LLM calls.
 - **Detection Patterns (13 regex patterns):**
   - `"ignore previous instructions"`
   - `"disregard above"`
@@ -1129,12 +1099,8 @@ class SQLQueryResult(BaseModel):
 ### 9.1 Environment Variables
 
 ```bash
-# ── Required (at least one LLM provider) ──
+# ── Required for query mode ──
 OPENROUTER_API_KEY=sk-or-...        # Recommended: single key for all models
-
-# ── Optional LLM providers ──
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
 
 # ── Model selection ──
 LLM_MODEL=google/gemini-3-flash-preview    # Default LLM model
@@ -1230,10 +1196,10 @@ FinanceRAG/
 ├── src/
 │   ├── __init__.py                         # Package init
 │   ├── config.py                           # Configuration management
-│   ├── models.py                           # 60+ Pydantic data models
-│   ├── llm_client.py                       # Multi-provider LLM abstraction
+│   ├── models.py                           # Pydantic data models
+│   ├── llm_client.py                       # OpenRouter LLM abstraction
 │   ├── embeddings.py                       # Embedding provider management
-│   ├── security.py                         # Input validation, injection defense
+│   ├── validation.py                       # Query and file validation policies
 │   ├── rag_agent.py                        # Main orchestrator
 │   │
 │   ├── ingestion/
@@ -1241,7 +1207,6 @@ FinanceRAG/
 │   │   ├── pdf_parser.py                   # PDF text extraction (pdfplumber)
 │   │   ├── vlm_extractor.py                # Vision LLM table extraction
 │   │   ├── vision_table_extractor.py       # Docling local table extraction
-│   │   ├── table_extractor.py              # Rule-based fallback extraction
 │   │   ├── spreadsheet_parser.py           # Excel/CSV parsing
 │   │   ├── chunker.py                      # Semantic text chunking
 │   │   ├── schema_detector.py              # LLM schema enhancement
@@ -1333,9 +1298,9 @@ fpdf2
 |------|-------|-------------|
 | 1.1 | `pyproject.toml`, `requirements.txt`, `env.example` | Project setup, dependencies, config files |
 | 1.2 | `src/__init__.py`, `src/config.py` | Configuration management with secure API key handling |
-| 1.3 | `src/models.py` | All Pydantic data models (60+ models) |
-| 1.4 | `src/security.py` | Input validation, prompt injection detection, sanitization |
-| 1.5 | `src/llm_client.py` | Multi-provider LLM client (OpenRouter, OpenAI, Anthropic) |
+| 1.3 | `src/models.py` | Pydantic data models |
+| 1.4 | `src/validation.py`, `src/common/prompts.py` | Input validation, suspicious prompt-pattern advisory, sanitization |
+| 1.5 | `src/llm_client.py` | OpenRouter LLM client |
 | 1.6 | `src/embeddings.py` | Embedding provider (local sentence-transformers + remote) |
 | 1.7 | `src/ui/console.py` | Rich-based terminal UI components |
 
@@ -1359,11 +1324,10 @@ fpdf2
 | Task | Files | Description |
 |------|-------|-------------|
 | 3.1 | `src/ingestion/pdf_parser.py` | PDF text extraction with pdfplumber |
-| 3.2 | `src/ingestion/table_extractor.py` | Rule-based table extraction (fallback) |
-| 3.3 | `src/ingestion/vision_table_extractor.py` | Docling local table extraction |
-| 3.4 | `src/ingestion/vlm_extractor.py` | VLM-based table extraction via OpenRouter |
-| 3.5 | `src/ingestion/chunker.py` | Semantic text chunking |
-| 3.6 | `src/ingestion/schema_detector.py` | LLM-powered schema enhancement |
+| 3.2 | `src/ingestion/vision_table_extractor.py` | Docling local table extraction |
+| 3.3 | `src/ingestion/vlm_extractor.py` | VLM-based table extraction via OpenRouter |
+| 3.4 | `src/ingestion/chunker.py` | Semantic text chunking |
+| 3.5 | `src/ingestion/schema_detector.py` | LLM-powered schema enhancement |
 | 3.7 | `src/ingestion/temporal_extractor.py` | Fiscal period metadata extraction |
 | 3.8 | `src/ingestion/spreadsheet_parser.py` | Excel/CSV parsing |
 | 3.9 | `scripts/ingest.py` | Ingestion CLI script |
@@ -1381,7 +1345,6 @@ fpdf2
 | 4.4 | `src/tools/sql_query.py` | NL-to-SQL with schema context |
 | 4.5 | `src/tools/calculator.py` | Safe AST-based arithmetic with transcripts |
 | 4.6 | `src/tools/get_document.py` | Full document retrieval |
-| 4.7 | `src/tools/comparability.py` | Field comparability checking |
 
 **Tests:** `test_calculator.py`, `test_tools_fixes.py`
 

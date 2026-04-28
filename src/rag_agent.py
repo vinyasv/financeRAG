@@ -16,7 +16,6 @@ from .ingestion.exceptions import ExtractionFailed
 from .ingestion.pdf_parser import PDFParser
 from .ingestion.schema_detector import SchemaDetector
 from .ingestion.spreadsheet_parser import SpreadsheetParser
-from .ingestion.table_extractor import TableExtractor
 from .ingestion.temporal_extractor import extract_temporal_metadata
 from .ingestion.vision_table_extractor import VisionTableExtractor
 from .ingestion.vlm_extractor import VLMTableExtractor
@@ -98,8 +97,6 @@ class RAGAgent:
         # Ingestion components
         self.pdf_parser = PDFParser()
         self.spreadsheet_parser = SpreadsheetParser()
-        self.table_extractor = TableExtractor()  # Rule-based fallback
-
         self.docling_extractor = VisionTableExtractor()  # Secondary - Local Docling
         self.vlm_extractor = VLMTableExtractor() # Primary - Cloud VLM
         self.chunker = SemanticChunker()
@@ -196,7 +193,7 @@ class RAGAgent:
             self.chroma_store.add_chunks(chunks)
 
     async def _extract_pdf_tables(self, parsed, pdf_path: Path, doc_id: str) -> list[ExtractedTable]:
-        """Extract PDF tables using the configured fallback chain."""
+        """Extract PDF tables using VLM first, then Docling local fallback."""
         tables: list[ExtractedTable] = []
 
         if config.openrouter_api_key:
@@ -211,11 +208,11 @@ class RAGAgent:
                 logger.info("Using Docling for table extraction (Local Fast Mode)")
                 tables = await self.docling_extractor.extract_tables_from_pdf(pdf_path, doc_id)
             except ExtractionFailed as exc:
-                logger.warning(f"Docling extraction failed: {exc}, falling back to rule-based")
+                logger.warning(f"Docling extraction failed: {exc}; continuing without PDF tables")
                 tables = []
 
         if not tables:
-            tables = self.table_extractor.extract_tables(parsed, doc_id)
+            logger.info("No PDF tables extracted; continuing with text chunks only")
 
         return tables
 

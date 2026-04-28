@@ -32,7 +32,7 @@ _COMPILED_INJECTION_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern i
 
 
 def detect_injection_attempt(text: str) -> tuple[bool, list[str]]:
-    """Detect likely prompt-injection attempts in user input."""
+    """Advisory detection for suspicious prompt-like patterns in user input."""
     text_lower = text.lower()
     matches = [
         INJECTION_PATTERNS[index]
