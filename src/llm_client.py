@@ -1,4 +1,4 @@
-"""LLM client abstraction for flexible provider support."""
+"""LLM client abstraction for OpenRouter-backed generation."""
 
 import os
 from abc import ABC, abstractmethod
@@ -58,10 +58,8 @@ class LLMClient(ABC):
         raise NotImplementedError("Vision not supported by this client")
 
 
-class OpenAICompatibleClient(LLMClient):
-    """Shared implementation for OpenAI-compatible chat providers."""
-
-    provider = "openai-compatible"
+class OpenRouterTransportClient(LLMClient):
+    """Shared SDK transport for OpenRouter's chat API."""
 
     def __init__(self, api_key: str | None, model: str):
         self.api_key = api_key
@@ -109,12 +107,12 @@ class OpenAICompatibleClient(LLMClient):
         return await self._chat_completion([{"role": "user", "content": prompt}])
 
 
-class OpenRouterClient(OpenAICompatibleClient):
+class OpenRouterClient(OpenRouterTransportClient):
     """
     OpenRouter API client - access many models with one API key.
 
-    OpenRouter uses OpenAI-compatible API, so we use the OpenAI client
-    with a different base URL.
+    OpenRouter exposes an OpenAI-compatible API, so this uses the OpenAI
+    SDK transport with OpenRouter's base URL.
 
     Get your API key at: https://openrouter.ai/keys
     """
@@ -227,4 +225,6 @@ def get_llm_client(
     if provider == "openrouter":
         return OpenRouterClient(model=default_model)
     
-    raise ValueError(f"Unknown LLM provider: {provider}. Valid options: 'auto', 'openrouter', 'none'")
+    raise ValueError(
+        f"Unknown LLM provider: {provider}. Valid options: 'auto', 'openrouter', 'none'"
+    )

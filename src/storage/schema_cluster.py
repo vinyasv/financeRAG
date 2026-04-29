@@ -716,7 +716,8 @@ class SchemaClusterManager:
         table_name: str,
         columns: list[str],
         schema_description: str = "",
-        source_document: str = ""
+        source_document: str = "",
+        queryable_table_name: str | None = None,
     ) -> str:
         """
         Assign a table to a cluster based on its metadata.
@@ -729,6 +730,8 @@ class SchemaClusterManager:
             columns: List of column names
             schema_description: Optional description of the table
             source_document: Source filename (improves LLM classification)
+            queryable_table_name: Native SQL table name to store in the cluster.
+                Defaults to table_name.
             
         Returns:
             cluster_id the table was assigned to
@@ -745,6 +748,7 @@ class SchemaClusterManager:
         
         # Build keyword set for cluster matching
         table_keywords = self._extract_keywords(table_name, columns, schema_description)
+        stored_table_name = queryable_table_name or table_name
         
         # Create cluster ID
         cluster_id = f"{company}_{domain_id}"
@@ -767,8 +771,8 @@ class SchemaClusterManager:
         cluster = self.clusters[cluster_id]
         
         # Add table to cluster if not already there
-        if table_name not in cluster.table_names:
-            cluster.table_names.append(table_name)
+        if stored_table_name not in cluster.table_names:
+            cluster.table_names.append(stored_table_name)
             
             # Only add keywords if under limit
             if len(cluster.keywords) < MAX_CLUSTER_KEYWORDS:
@@ -784,7 +788,7 @@ class SchemaClusterManager:
                 )
         
         # Update index
-        self.table_to_cluster[table_name] = cluster_id
+        self.table_to_cluster[stored_table_name] = cluster_id
         
         # Invalidate cache since data changed
         self._cache_valid = False

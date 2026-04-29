@@ -108,16 +108,70 @@ def add_limit_clause(sql: str, max_rows: int = MAX_SQL_RESULT_ROWS) -> str:
     
     This prevents unbounded result sets that could cause DoS.
     """
-    sql_upper = sql.upper()
-    
-    # If already has LIMIT, don't add another
-    if 'LIMIT' in sql_upper:
+    # If already has a top-level LIMIT, don't add another. The token scan
+    # deliberately ignores quoted strings/identifiers so names like
+    # unlimited_transactions or limit_price do not bypass the row cap.
+    if _has_top_level_limit(sql):
         return sql
     
     # Remove trailing semicolon if present
     sql_clean = sql.rstrip().rstrip(';')
     
     return f"{sql_clean} LIMIT {max_rows}"
+
+
+def _has_top_level_limit(sql: str) -> bool:
+    """Return True if SQL contains an unquoted top-level LIMIT token."""
+    quote: str | None = None
+    paren_depth = 0
+    i = 0
+
+    while i < len(sql):
+        char = sql[i]
+
+        if quote:
+            if char == quote:
+                # SQL escapes a quote inside a quoted string/identifier by
+                # doubling it. Skip the escaped quote and remain quoted.
+                if i + 1 < len(sql) and sql[i + 1] == quote:
+                    i += 2
+                    continue
+                quote = None
+            i += 1
+            continue
+
+        if char in ("'", '"', "`"):
+            quote = char
+            i += 1
+            continue
+
+        if char == "[":
+            quote = "]"
+            i += 1
+            continue
+
+        if char == "(":
+            paren_depth += 1
+            i += 1
+            continue
+
+        if char == ")":
+            paren_depth = max(0, paren_depth - 1)
+            i += 1
+            continue
+
+        if paren_depth == 0 and (char.isalpha() or char == "_"):
+            start = i
+            i += 1
+            while i < len(sql) and (sql[i].isalnum() or sql[i] == "_"):
+                i += 1
+            if sql[start:i].upper() == "LIMIT":
+                return True
+            continue
+
+        i += 1
+
+    return False
 
 
 class SQLiteStore:
@@ -278,13 +332,17 @@ class SQLiteStore:
     # Table Operations
     # =========================================================================
     
-    def save_table(self, table: ExtractedTable) -> None:
+    def save_table(self, table: ExtractedTable) -> str | None:
         """
         Save an extracted table as a native SQL table.
         
         Creates a real SQL table with proper columns instead of EAV format.
         This allows direct SQL queries like: SELECT * FROM table_name WHERE col = value
+
+        Returns:
+            The native SQL table name when rows are persisted, otherwise None.
         """
+        native_table_name: str | None = None
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
@@ -347,6 +405,7 @@ class SQLiteStore:
                 ))
             
             conn.commit()
+            return native_table_name
     
     def _make_unique_table_name(
         self,

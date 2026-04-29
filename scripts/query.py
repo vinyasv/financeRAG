@@ -68,7 +68,7 @@ Examples:
 
 Environment Variables:
   OPENROUTER_API_KEY    OpenRouter API key (recommended)
-	"""
+"""
     )
     
     parser.add_argument(
@@ -87,7 +87,7 @@ Environment Variables:
         "-p", "--provider",
         choices=["auto", "openrouter", "none"],
         default="auto",
-        help="LLM provider (default: auto-detect from env vars)"
+        help="LLM provider (default: auto-detect OpenRouter from env vars)"
     )
     
     parser.add_argument(

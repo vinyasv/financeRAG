@@ -451,6 +451,51 @@ class TestTableNamingFixes:
 class TestPartialFailureTolerance:
     """Tests that one bad table does not abort an ingestion batch."""
 
+    def test_pdf_table_cluster_uses_native_queryable_table_name(self, tmp_path):
+        """PDF table clusters must reference the generated SQL table name."""
+        import asyncio
+
+        from src.models import Document, ExtractedTable
+        from src.rag_agent import RAGAgent
+
+        db_path = tmp_path / "pdf-cluster.db"
+        store = SQLiteStore(db_path=db_path)
+        doc_id = "abcdef1234567890"
+        source_document = "NVIDIA_Annual_Report.pdf"
+        store.save_document(Document(id=doc_id, filename=source_document, page_count=1))
+
+        agent = RAGAgent.__new__(RAGAgent)
+        agent.llm_client = None
+        agent.sqlite_store = store
+        agent.schema_detector = None
+        agent.schema_cluster_manager = SchemaClusterManager(sqlite_store=store)
+
+        table = ExtractedTable(
+            id="table_1",
+            document_id=doc_id,
+            table_name="nvidia_revenue",
+            page_number=1,
+            schema_description="NVIDIA revenue table",
+            columns=["quarter", "revenue"],
+            rows=[{"quarter": "Q1", "revenue": 100}],
+            raw_text="| quarter | revenue |\n| Q1 | 100 |",
+        )
+
+        asyncio.run(agent._process_pdf_tables([table], source_document=source_document))
+
+        native_tables = store.list_spreadsheet_tables()
+        assert len(native_tables) == 1
+        native_name = native_tables[0]["table_name"]
+        assert native_name.startswith("t_")
+
+        clusters = agent.schema_cluster_manager.get_relevant_clusters("NVIDIA revenue")
+        clustered_names = {name for cluster in clusters for name in cluster.table_names}
+        assert native_name in clustered_names
+        assert table.table_name not in clustered_names
+
+        schema = agent.schema_cluster_manager.get_schemas_for_query("NVIDIA revenue", store)
+        assert f"-- TABLE: {native_name}" in schema
+
     def test_partial_failure_in_table_batch_does_not_abort(self, tmp_path):
         """When one table is rigged to fail mid-batch, the other two must
         still be persisted (the gather no longer aborts the batch)."""

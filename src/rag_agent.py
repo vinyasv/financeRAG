@@ -175,6 +175,7 @@ class RAGAgent:
         columns: list[str],
         schema_description: str,
         source_document: str,
+        queryable_table_name: str | None = None,
     ) -> None:
         """Assign a table to a schema cluster without failing ingestion."""
         try:
@@ -183,6 +184,7 @@ class RAGAgent:
                 columns=columns,
                 schema_description=schema_description,
                 source_document=source_document,
+                queryable_table_name=queryable_table_name,
             )
         except Exception as exc:
             logger.warning(f"Table clustering failed for {table_name}, skipping assignment: {exc}")
@@ -237,13 +239,15 @@ class RAGAgent:
                     except Exception as exc:
                         logger.warning(f"Schema enhancement failed for {table.id}, using original: {exc}")
 
-                self.sqlite_store.save_table(table)
-                await self._assign_cluster_safe(
-                    table_name=table.table_name,
-                    columns=table.columns,
-                    schema_description=table.schema_description,
-                    source_document=source_document,
-                )
+                native_table_name = self.sqlite_store.save_table(table)
+                if native_table_name:
+                    await self._assign_cluster_safe(
+                        table_name=table.table_name,
+                        columns=table.columns,
+                        schema_description=table.schema_description,
+                        source_document=source_document,
+                        queryable_table_name=native_table_name,
+                    )
 
         tasks = [process_table(table) for table in tables]
         results = await asyncio.gather(*tasks, return_exceptions=True)

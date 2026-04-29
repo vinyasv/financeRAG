@@ -82,6 +82,18 @@ def test_add_limit_clause():
         ("SELECT * FROM users LIMIT 100", "SELECT * FROM users LIMIT 100"),  # unchanged
         ("SELECT * FROM users;", "SELECT * FROM users LIMIT 10000"),  # removes semicolon
         ("select * from t", "select * from t LIMIT 10000"),
+        (
+            "SELECT * FROM unlimited_transactions",
+            "SELECT * FROM unlimited_transactions LIMIT 10000",
+        ),
+        (
+            "SELECT limit_price FROM prices",
+            "SELECT limit_price FROM prices LIMIT 10000",
+        ),
+        (
+            "SELECT 'limit' AS word FROM prices",
+            "SELECT 'limit' AS word FROM prices LIMIT 10000",
+        ),
     ]
     
     all_passed = True
