@@ -3,7 +3,11 @@
 import logging
 from typing import Any
 
-from ..common.prompts import STANDARD_PROMPT_GUARD, prepare_prompt_user_content
+from ..common.prompts import (
+    STANDARD_PROMPT_GUARD,
+    clamp_for_prompt,
+    prepare_prompt_user_content,
+)
 from ..models import (
     CalculationTranscript,
     Citation,
@@ -13,6 +17,7 @@ from ..models import (
     ToolResult,
 )
 from ..storage.document_store import DocumentStore
+from ..validation import MAX_PROMPT_CONTENT_LENGTH
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +77,10 @@ FINANCIAL FORMULA REFERENCE (for explanation only, not computation):
 
 PROFESSIONAL STANDARDS:
 • Use proper financial terminology
-• Format large numbers with appropriate units ($X billion, $X million)
+• Format large numbers with appropriate scale (X billion, X million), and add a
+  currency symbol ONLY when the research findings establish the value is currency
+  — calculator transcripts are unit-agnostic, so a bare "12.50K" may be a
+  headcount or a share count, not dollars
 • Round percentages to one decimal place
 • Present comparative data in parallel structure
 • Distinguish between GAAP and non-GAAP metrics when relevant
@@ -190,8 +198,12 @@ class ResponseSynthesizer:
         if isinstance(result, dict):
             if "error" in result:
                 return f"Error: {result['error']}"
-            
-            # Format dict nicely
+
+            # Format dict nicely. Every value is length-capped: the 5-item limit
+            # below applies only to the vector-search LIST branch, so an
+            # uncapped dict value (a full document body, a wide SQL row payload)
+            # went into the synthesis prompt verbatim. get_document caps itself,
+            # but that only fixed one tool -- this is the shared choke point.
             parts = []
             for k, v in result.items():
                 if k in ("columns", "row_count") or k.startswith("__"):
@@ -199,8 +211,9 @@ class ResponseSynthesizer:
                 if isinstance(v, (int, float)):
                     parts.append(f"{k}: {v:,}")
                 else:
-                    parts.append(f"{k}: {v}")
-            return ", ".join(parts) if parts else str(result)
+                    parts.append(f"{k}: {clamp_for_prompt(str(v), MAX_PROMPT_CONTENT_LENGTH)}")
+            formatted = ", ".join(parts) if parts else str(result)
+            return clamp_for_prompt(formatted, MAX_PROMPT_CONTENT_LENGTH)
         
         if isinstance(result, list):
             if len(result) == 0:

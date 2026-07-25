@@ -145,6 +145,12 @@ cp env.example .env
 | `LLM_MODEL` | `google/gemini-3-flash-preview` | LLM model for planning and synthesis |
 | `EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model (remote) |
 | `EMBEDDING_PROVIDER` | `local` | `auto` (prefers OpenRouter if key available), `local` (BAAI/bge-small-en-v1.5), or `openrouter` |
+| `LLM_PROVIDER` | `auto` | `auto`, `openrouter`, or `none` |
+| `RERANKER_MODEL` | `rank-T5-flan` | FlashRank model name |
+| `USE_RERANKING` | `true` | Disable to skip cross-encoder reranking |
+| `CHUNK_SIZE` | `500` | Target chunk size in approximate tokens |
+| `CHUNK_OVERLAP` | `50` | Overlap between adjacent chunks |
+| `LOCAL_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | sentence-transformers model |
 
 ## Architecture
 
@@ -169,7 +175,7 @@ scripts/
 ├── ingest.py           # Document ingestion CLI
 ├── query.py            # Query CLI (REPL, single-shot, export)
 └── analyst_evaluation.py  # Multi-document evaluation suite
-tests/                  # 11 test suites covering security, tools, storage, execution, and refactors
+tests/                  # 22 test suites covering security, tools, storage, execution, ingestion, and prompt guards
 ```
 
 See [technicaloverview.md](technicaloverview.md) for the full architecture deep-dive.
@@ -179,11 +185,11 @@ See [technicaloverview.md](technicaloverview.md) for the full architecture deep-
 | Component | Technology |
 |-----------|-----------|
 | Vector store | [ChromaDB](https://www.trychroma.com/) (HNSW, cosine similarity) |
-| Reranking | [FlashRank](https://github.com/PrithivirajDamodaran/FlashRank) (ms-marco-MiniLM-L-6-v2) |
+| Reranking | [FlashRank](https://github.com/PrithivirajDamodaran/FlashRank) (rank-T5-flan) |
 | Table extraction | Gemini 2.5 Flash Lite VLM → [Docling](https://github.com/DS4SD/docling) TableFormer (local) |
 | Embeddings | [sentence-transformers](https://www.sbert.net/) (BAAI/bge-small-en-v1.5) or OpenRouter (qwen3-embedding-8b) |
 | Structured storage | SQLite with SQL injection prevention |
-| LLM routing | [OpenRouter](https://openrouter.ai/) (12 model aliases across 4 tiers) |
+| LLM routing | [OpenRouter](https://openrouter.ai/) (15 model aliases across 4 tiers) |
 | PDF parsing | PyMuPDF + pdfplumber |
 | Data models | [Pydantic](https://docs.pydantic.dev/) v2 |
 | Terminal UI | [Rich](https://github.com/Textualize/rich) |

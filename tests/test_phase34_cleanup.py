@@ -22,7 +22,7 @@ def test_pdf_extraction_stops_after_docling_failure(monkeypatch):
         extract_tables_from_pdf=AsyncMock(side_effect=ExtractionFailed("docling down"))
     )
 
-    result = asyncio.run(agent._extract_pdf_tables(object(), MagicMock(name="report.pdf"), "doc"))
+    result = asyncio.run(agent._extract_pdf_tables(MagicMock(name="report.pdf"), "doc"))
 
     assert result == []
     assert not hasattr(agent, "table_extractor")

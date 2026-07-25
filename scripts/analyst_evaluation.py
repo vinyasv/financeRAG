@@ -7,7 +7,12 @@ Runs complex, real-world analyst queries across multiple financial documents
 - Query text
 - Response
 - Response time
-- Accuracy assessment
+- Source recall and ground-truth-hint coverage
+
+These are COVERAGE PROXIES, not correctness judgements: they measure whether
+the expected documents were cited and whether the answer mentions the terms a
+correct answer would contain. Verifying that a reported figure is actually
+right still requires a human or a judge model.
 
 Usage:
     python scripts/analyst_evaluation.py
@@ -18,7 +23,7 @@ import asyncio
 import json
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -41,6 +46,38 @@ class QueryResult:
     citations_count: int
     sources_used: list[str]
     accuracy_notes: str = ""
+    # Coverage proxies, NOT correctness judgements: source_recall is the
+    # fraction of expected documents that appear in the citations, and
+    # hint_coverage the fraction of ground-truth hints whose distinctive terms
+    # appear in the answer. Neither verifies a number is right.
+    source_recall: float = 0.0
+    matched_sources: list[str] = field(default_factory=list)
+    hint_coverage: float | None = None
+
+
+_STOPWORDS = {
+    "the", "and", "for", "with", "from", "that", "this", "than", "have", "has",
+    "due", "to", "in", "of", "at", "a", "an", "is", "are", "was", "were", "be",
+}
+
+
+def _hint_terms_present(hint: str, answer: str, threshold: float = 0.5) -> bool:
+    """Whether an answer mentions most of a hint's distinctive terms.
+
+    A deliberately crude lexical proxy -- it cannot tell a correct figure from
+    a wrong one, only whether the answer is in the right territory. Reported as
+    "hint coverage", never as accuracy.
+    """
+    terms = {
+        term.strip(".,;:%$()").lower()
+        for term in hint.split()
+        if len(term) > 2
+    } - _STOPWORDS
+    if not terms:
+        return False
+    answer_lower = answer.lower()
+    hits = sum(1 for term in terms if term in answer_lower)
+    return hits / len(terms) >= threshold
 
 
 # Multi-document analyst queries organized by complexity and type
@@ -263,14 +300,34 @@ async def run_evaluation():
             )
             results.append(result)
             
-            # Check if expected sources were used
-            expected_hit = any(
-                any(exp.lower() in src.lower() for src in sources) 
-                for exp in q['expected_sources']
+            # Score the answer instead of discarding the check. Neither metric
+            # is a correctness judgement -- they are coverage proxies -- so they
+            # are named for what they actually measure.
+            matched = [
+                exp for exp in q['expected_sources']
+                if any(exp.lower() in src.lower() for src in sources)
+            ]
+            result.source_recall = len(matched) / len(q['expected_sources'])
+            result.matched_sources = matched
+
+            hints = q.get('ground_truth_hints') or []
+            hit_hints = [
+                hint for hint in hints
+                if _hint_terms_present(hint, response.answer)
+            ]
+            result.hint_coverage = len(hit_hints) / len(hints) if hints else None
+            result.accuracy_notes = (
+                f"source recall {len(matched)}/{len(q['expected_sources'])}; "
+                f"ground-truth-hint term overlap {len(hit_hints)}/{len(hints)}"
+                if hints else
+                f"source recall {len(matched)}/{len(q['expected_sources'])}"
             )
-            
-            status = "✓" if expected_hit else "⚠"
-            print(f"{status} Response: {elapsed_ms:.0f}ms | {len(sources)} sources | {len(response.answer)} chars")
+
+            status = "✓" if matched else "⚠"
+            print(
+                f"{status} Response: {elapsed_ms:.0f}ms | {len(sources)} sources | "
+                f"recall {result.source_recall:.0%} | {len(response.answer)} chars"
+            )
             
         except Exception as e:
             elapsed_ms = (time.time() - start_time) * 1000
@@ -303,6 +360,24 @@ async def run_evaluation():
     # Analyze source coverage
     multi_source_queries = [r for r in results if len(r.sources_used) > 1]
     print(f"Multi-source responses: {len(multi_source_queries)}/{len(results)}")
+
+    scored = [r for r in results if not r.answer.startswith("ERROR:")]
+    if scored:
+        mean_recall = sum(r.source_recall for r in scored) / len(scored)
+        full_recall = sum(1 for r in scored if r.source_recall == 1.0)
+        missed = [r for r in scored if r.source_recall == 0.0]
+        with_hints = [r for r in scored if r.hint_coverage is not None]
+        print(f"Mean source recall: {mean_recall:.0%}")
+        print(f"All expected sources cited: {full_recall}/{len(scored)}")
+        print(f"No expected source cited:   {len(missed)}/{len(scored)}")
+        if with_hints:
+            mean_hint = sum(r.hint_coverage for r in with_hints) / len(with_hints)
+            print(f"Mean ground-truth-hint coverage: {mean_hint:.0%}")
+        if missed:
+            print("\nQueries citing none of their expected sources:")
+            for r in missed:
+                print(f"  [{r.query_id}] {r.category}")
+    print(f"Errored queries: {len(results) - len(scored)}/{len(results)}")
     
     # Time distribution
     fast_queries = [r for r in results if r.response_time_ms < 5000]
@@ -325,6 +400,9 @@ async def run_evaluation():
                 "avg_response_time_ms": avg_time,
                 "total_time_s": total_time / 1000,
                 "multi_source_responses": len(multi_source_queries),
+                "mean_source_recall": (
+                    sum(r.source_recall for r in results) / len(results) if results else 0.0
+                ),
                 "fast_queries": len(fast_queries),
                 "medium_queries": len(medium_queries),
                 "slow_queries": len(slow_queries),
@@ -354,6 +432,11 @@ def generate_markdown_report(results: list[QueryResult], stats: dict, output_pat
         f"| Total Chunks | {stats['chunk_count']} |",
         f"| Average Response Time | {sum(r.response_time_ms for r in results)/len(results) if results else 0:.0f}ms |",
         f"| Multi-Source Responses | {len([r for r in results if len(r.sources_used) > 1])} |",
+        f"| Mean Source Recall | {(sum(r.source_recall for r in results) / len(results)) if results else 0:.0%} |",
+        "",
+        "> Source recall and hint coverage are COVERAGE PROXIES, not correctness",
+        "> judgements. They show whether the expected documents were cited and",
+        "> whether the answer uses the terms a correct answer would contain.",
         "",
         "## Query Results",
         "",
@@ -372,6 +455,11 @@ def generate_markdown_report(results: list[QueryResult], stats: dict, output_pat
             f"**Sources Used:** {', '.join(r.sources_used) if r.sources_used else 'None detected'}",
             "",
             f"**Citations:** {r.citations_count}",
+            "",
+            f"**Source Recall:** {r.source_recall:.0%}"
+            + (f" | **Hint Coverage:** {r.hint_coverage:.0%}" if r.hint_coverage is not None else ""),
+            "",
+            f"**Assessment:** {r.accuracy_notes or 'not scored'}",
             "",
             "**Answer:**",
             "",

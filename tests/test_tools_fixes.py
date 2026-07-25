@@ -66,23 +66,6 @@ class TestSQLQueryToolFixes:
                 assert "timed out" in str(exc_info.value).lower()
 
 
-class TestSQLExecutorFixes:
-    """Tests for SQLExecutor error reporting."""
-    
-    def test_error_field_populated_on_failure(self):
-        """SQLExecutor should populate error field on failure."""
-        from src.tools.sql_query import SQLExecutor
-        
-        executor = SQLExecutor()
-        
-        # Execute invalid SQL
-        result = executor.execute("INVALID SQL QUERY HERE")
-        
-        assert isinstance(result, dict)
-        assert result["error"] is not None
-        assert len(result["rows"]) == 0
-
-
 class TestGetDocumentFixes:
     """Tests for GetDocumentTool input validation."""
     

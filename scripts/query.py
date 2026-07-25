@@ -17,6 +17,7 @@ from src.cli.common import (
     format_citations,
     silence_third_party_loggers,
 )
+from src.config import config
 from src.llm_client import OpenRouterClient, get_llm_client
 from src.rag_agent import RAGAgent
 from src.ui import (
@@ -86,8 +87,8 @@ Environment Variables:
     parser.add_argument(
         "-p", "--provider",
         choices=["auto", "openrouter", "none"],
-        default="auto",
-        help="LLM provider (default: auto-detect OpenRouter from env vars)"
+        default=None,
+        help="LLM provider (default: config.llm_provider, normally auto-detect)"
     )
     
     parser.add_argument(
@@ -216,9 +217,9 @@ async def main():
         
         models = OpenRouterClient.list_models()
         categories = [
-            ("Fast & Cheap", ["gemini-flash", "gpt-4o-mini", "claude-haiku", "llama-8b"]),
-            ("Balanced", ["gpt-4o", "claude-sonnet", "gemini-pro", "llama-70b"]),
-            ("Best Quality", ["claude-opus", "gpt-4-turbo", "llama-405b"]),
+            ("Fast & Cheap", ["gemini-flash", "gpt-5-mini", "gpt-4o-mini", "claude-haiku", "llama-8b"]),
+            ("Balanced", ["claude-sonnet", "claude-fable", "gpt-5", "gpt-4o", "gemini-pro", "llama-70b"]),
+            ("Best Quality", ["claude-opus", "claude-opus-fast", "gpt-5-pro"]),
             ("Free (rate limited)", ["free"]),
         ]
         
@@ -226,9 +227,10 @@ async def main():
         return
     
     # Get LLM client
-    llm_client = get_llm_client(provider=args.provider, model=args.model)
+    provider = args.provider or config.llm_provider
+    llm_client = get_llm_client(provider=provider, model=args.model)
     
-    provider_name = args.provider if args.provider != "auto" else None
+    provider_name = provider if provider != "auto" else None
     if llm_client:
         if hasattr(llm_client, 'provider'):
             provider_name = llm_client.provider

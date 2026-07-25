@@ -105,14 +105,61 @@ class TestChromaStoreFixes:
         assert hasattr(store, '_init_lock')
         assert isinstance(store._init_lock, type(threading.Lock()))
     
-    def test_thread_safety_double_check_pattern(self):
-        """Verify the double-checked locking pattern is implemented."""
-        import inspect
-        source = inspect.getsource(ChromaStore._ensure_initialized)
-        
-        # Should have both the outer check and inner check
-        assert "if self._client is None:" in source
-        assert "with self._init_lock:" in source
+    def test_initialization_never_publishes_a_partial_store(self):
+        """Concurrent callers must never observe a client without a collection.
+
+        Was a source-string assertion on `if self._client is None:`, which
+        pinned the exact bug it meant to prevent: _client was published BEFORE
+        the collection was built, so a second thread could pass the fast-path
+        check and then use a None _collection. This exercises the behaviour
+        instead of the source text.
+        """
+        import threading
+
+        store = ChromaStore.__new__(ChromaStore)
+        store.persist_path = Path(tempfile.mkdtemp())
+        store.collection_name = "documents"
+        store.embedding_provider = "local"
+        store._client = None
+        store._collection = None
+        store._embedding_function = None
+        store._init_lock = threading.Lock()
+
+        observed: list[tuple[bool, bool]] = []
+        real_get_embedding_function = store._get_embedding_function
+
+        def slow_embedding_function():
+            # Widen the window in which a partially-built store could leak.
+            observed.append((store._client is not None, store._collection is not None))
+            return real_embedding_function_result
+
+        real_embedding_function_result = real_get_embedding_function()
+        store._get_embedding_function = slow_embedding_function
+
+        barrier = threading.Barrier(4)
+        errors: list[BaseException] = []
+
+        def worker():
+            try:
+                barrier.wait()
+                store._ensure_initialized()
+                # Any thread that returns must see a usable collection.
+                assert store._collection is not None
+            except BaseException as exc:  # noqa: BLE001 - surfaced below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"threads observed a partial store: {errors}"
+        assert store._client is not None and store._collection is not None
+        # While the collection was still being built, _client must not be set.
+        assert all(not client_set for client_set, _ in observed), (
+            "client was published before the collection existed"
+        )
 
 
 class TestDocumentStoreFixes:

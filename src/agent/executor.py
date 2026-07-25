@@ -171,36 +171,85 @@ class DAGExecutor:
         Resolve references to previous step results.
         
         References are in the format {step_id} or {step_id.field}
+
+        An unknown step_id is left untouched -- a tool input may legitimately
+        contain literal braces. But once the step_id IS known, every field on
+        the path must exist: navigating a miss (or a non-navigable value) is a
+        hard error, never a partial substitution.
         """
         def replace_ref(match: re.Match) -> str:
             ref = match.group(1)
             parts = ref.split(".")
-            
+
             step_id = parts[0]
             if step_id not in context:
                 return match.group(0)  # Keep original if not found
-            
+
             value = context[step_id]
-            
-            # Navigate nested fields
-            for part in parts[1:]:
+
+            # Navigate nested fields. Fail loudly on a missing field: the old
+            # `value.get(part, value)` fell back to the PARENT, so a typo'd
+            # field silently stringified the whole dict into the tool input.
+            # Mirrors CalculatorTool._resolve_references_with_bindings.
+            field_path = parts[1:]
+            for part in field_path:
                 if isinstance(value, dict):
-                    value = value.get(part, value)
-                elif hasattr(value, part):
-                    value = getattr(value, part)
+                    if part not in value:
+                        raise ValueError(f"Field '{part}' not found in {step_id}")
+                    value = value[part]
                 else:
-                    break
-            
-            if value is not None:
-                return str(value)
-            else:
+                    value = self._navigate_attribute(value, part, step_id)
+
+            if value is None:
                 # Fail loudly: silently substituting "0" produces fabricated
                 # numbers in downstream calculations and breaks the audit
                 # contract. The Tool.run wrapper catches this and turns it
                 # into a structured ToolResult(success=False, error=...).
                 raise ValueError(f"Reference {ref} resolved to None")
+
+            # A navigated path must land on a scalar. Stringifying a surviving
+            # list/dict/object into a tool input is the same fabrication bug as
+            # the parent-dict fallback above, just wearing a different hat:
+            # `{step_1.rows}` would inject "[{'a': 1}, ...]" into a SQL query.
+            # The bare `{step_1}` form (no field path) keeps its historical
+            # str() behaviour -- callers rely on it to pass whole values through.
+            if field_path and not isinstance(value, (str, int, float, bool)):
+                raise ValueError(
+                    f"Reference {ref} resolved to {type(value).__name__}, "
+                    f"which cannot be substituted into a tool input"
+                )
+
+            return str(value)
         
         return re.sub(r'\{([^}]+)\}', replace_ref, input_str)
+
+    @staticmethod
+    def _navigate_attribute(value: Any, part: str, step_id: str) -> Any:
+        """
+        Read one data attribute off a non-dict step result.
+
+        Deliberately narrow. A plain `getattr` here happily returns bound
+        methods, so an LLM-plausible field name on a non-dict result used to
+        stringify a method object straight into a tool input -- e.g. a
+        vector_search step (which returns a bare list) referenced as
+        `{step_1.count}` produced:
+
+            SELECT * FROM t WHERE x = <built-in method count of list object ...>
+
+        Only genuine, public, non-callable data attributes are navigable.
+        """
+        if part.startswith("_"):
+            raise ValueError(
+                f"Cannot access private attribute '{part}' on {type(value)} from {step_id}"
+            )
+        if not hasattr(value, part):
+            raise ValueError(f"Cannot access '{part}' on {type(value)}")
+        attribute = getattr(value, part)
+        if callable(attribute):
+            raise ValueError(
+                f"Field '{part}' on {type(value)} from {step_id} is a method, not data"
+            )
+        return attribute
 
 
 class ExecutionMonitor:

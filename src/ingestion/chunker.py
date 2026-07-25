@@ -1,18 +1,24 @@
 """Semantic text chunking for RAG."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..common.ids import chunk_id
+from ..config import config
 from ..models import TextChunk
 from .pdf_parser import ParsedPDF
 
 
 @dataclass
 class ChunkingConfig:
-    """Configuration for text chunking."""
-    max_chunk_size: int = 500  # tokens (approximated as words * 1.3)
-    chunk_overlap: int = 50
+    """Configuration for text chunking.
+
+    Defaults come from the application config so the documented
+    ``CHUNK_SIZE`` / ``CHUNK_OVERLAP`` settings actually take effect; they were
+    previously duplicated here as literals and the config values were dead.
+    """
+    max_chunk_size: int = field(default_factory=lambda: config.chunk_size)
+    chunk_overlap: int = field(default_factory=lambda: config.chunk_overlap)
     min_chunk_size: int = 50
     
     @property

@@ -440,6 +440,17 @@ class SQLiteStore:
         max_table_len = 63 - len(prefix) - len(suffix_part)
         return f"{prefix}{table_name[:max_table_len]}{suffix_part}"
     
+    def make_native_table_name(self, table_name: str, doc_id: str) -> str:
+        """
+        Build a document-scoped native table name.
+
+        Public entry point to the same scheme the PDF path uses, so callers
+        that persist a table via :meth:`save_spreadsheet_native` (which issues
+        ``DROP TABLE IF EXISTS`` against a PRIMARY KEY name) cannot collide
+        across documents.
+        """
+        return self._make_unique_table_name(table_name, doc_id)
+
     def save_spreadsheet_native(self, table_name: str, df: pd.DataFrame, doc_id: str) -> None:
         """
         Save a spreadsheet as a native SQL table for fast queries.
@@ -538,11 +549,53 @@ class SQLiteStore:
                         pass  # Skip if validation or creation fails
                     break
     
-    def list_spreadsheet_tables(self) -> list[dict]:
-        """List all native spreadsheet tables."""
+    def list_native_tables(self, document_id: str | None = None) -> list[dict]:
+        """
+        List the REGISTRY of native SQL tables.
+
+        This reads the registry only; it does not verify that each underlying
+        table still exists. Nothing in the codebase deletes from
+        ``spreadsheet_tables``, so a table dropped out of band leaves an orphan
+        row here that will be offered to the planner and then fail as
+        "no such table".
+
+        Note also that ``save_table`` registers a PDF table only when it has
+        rows, so zero-row extractions are deliberately absent -- they are not
+        queryable and must not be advertised as available data.
+
+        The ``spreadsheet_tables`` registry tracks native tables created from
+        BOTH spreadsheets (``source_type='spreadsheet'``) and PDF-extracted
+        tables (``source_type='pdf'``), so this is the complete registry of
+        names that can actually appear in a SQL query. Contrast with
+        :meth:`list_tables`, which reads ``extracted_tables`` and returns
+        LOGICAL PDF table names that are not queryable.
+
+        Args:
+            document_id: Optional document ID to filter by
+
+        Returns:
+            List of dicts with keys: table_name, document_id, columns, row_count
+        """
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT table_name, document_id, columns, row_count FROM spreadsheet_tables")
+
+            # `is not None`, not truthiness: "" must filter for the empty
+            # document (matching nothing), never fall open and return every
+            # row. _document_ingestion_complete gates on this being empty, so
+            # a fail-open filter would report a document complete and skip
+            # ingesting it entirely.
+            if document_id is not None:
+                cursor.execute("""
+                    SELECT table_name, document_id, columns, row_count
+                    FROM spreadsheet_tables
+                    WHERE document_id = ?
+                """, (document_id,))
+            else:
+                cursor.execute("""
+                    SELECT table_name, document_id, columns, row_count
+                    FROM spreadsheet_tables
+                """)
+
             return [
                 {
                     'table_name': row['table_name'],
@@ -552,9 +605,19 @@ class SQLiteStore:
                 }
                 for row in cursor.fetchall()
             ]
-    
+
+    def list_spreadsheet_tables(self) -> list[dict]:
+        """List all native spreadsheet tables."""
+        return self.list_native_tables()
+
     def list_tables(self, document_id: str | None = None) -> list[TableSchema]:
-        """List all tables, optionally filtered by document."""
+        """
+        List PDF-extracted table METADATA, optionally filtered by document.
+
+        Returns rows from ``extracted_tables``; ``table_name`` here is the
+        LOGICAL name (e.g. "income_statement"), not a queryable SQL table.
+        Use :meth:`list_native_tables` for the real native-table registry.
+        """
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
@@ -580,6 +643,41 @@ class SQLiteStore:
                 for row in cursor.fetchall()
             ]
     
+    def delete_document(self, doc_id: str) -> list[str]:
+        """
+        Remove a document's metadata and every native table it created.
+
+        Returns the native table names that were dropped.
+
+        Nothing else in the codebase deleted from ``spreadsheet_tables``, so a
+        removed document previously left orphan registry rows that were still
+        offered to the planner and then failed as "no such table".
+        """
+        dropped: list[str] = []
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT table_name FROM spreadsheet_tables WHERE document_id = ?",
+                (doc_id,),
+            )
+            for row in cursor.fetchall():
+                table_name = row["table_name"]
+                try:
+                    validate_identifier(table_name)
+                except SecurityError:
+                    logger.warning(f"Skipping drop of unsafe table name: {table_name}")
+                    continue
+                conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+                dropped.append(table_name)
+
+            conn.execute("DELETE FROM spreadsheet_tables WHERE document_id = ?", (doc_id,))
+            conn.execute("DELETE FROM extracted_tables WHERE document_id = ?", (doc_id,))
+            conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+            conn.commit()
+
+        logger.info(f"Deleted document {doc_id} and {len(dropped)} native table(s)")
+        return dropped
+
     # =========================================================================
     # Query Operations
     # =========================================================================

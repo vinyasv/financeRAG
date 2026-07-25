@@ -24,6 +24,25 @@ def _load_dotenv():
 _dotenv_loaded = _load_dotenv()
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Read a boolean setting from the environment, tolerating common spellings."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an int setting from the environment, ignoring malformed values."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 @dataclass
 class Config:
     """
@@ -52,7 +71,10 @@ class Config:
     
     # Retrieval settings
     use_reranking: bool = True  # Cross-encoder reranking for +25% precision
-    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    # FlashRank model name (see src/tools/reranker.py). This is NOT a
+    # sentence-transformers cross-encoder id -- the previous value here was
+    # never read, so the docs described a model the code never loaded.
+    reranker_model: str = "rank-T5-flan"
     
     # Chunking settings
     chunk_size: int = 500
@@ -77,11 +99,19 @@ class Config:
         self.db_dir.mkdir(parents=True, exist_ok=True)
         
         # Load non-sensitive settings from environment
+        self.llm_provider = os.getenv("LLM_PROVIDER", self.llm_provider)
         self.llm_model = os.getenv("LLM_MODEL", self.llm_model)
         self.embedding_model = os.getenv("EMBEDDING_MODEL", self.embedding_model)
         self.embedding_provider = os.getenv("EMBEDDING_PROVIDER", self.embedding_provider)
+        self.local_embedding_model = os.getenv(
+            "LOCAL_EMBEDDING_MODEL", self.local_embedding_model
+        )
+        self.reranker_model = os.getenv("RERANKER_MODEL", self.reranker_model)
+        self.use_reranking = _env_bool("USE_RERANKING", self.use_reranking)
+        self.chunk_size = _env_int("CHUNK_SIZE", self.chunk_size)
+        self.chunk_overlap = _env_int("CHUNK_OVERLAP", self.chunk_overlap)
 
-    
+
     # =========================================================================
     # Secure API Key Access (retrieved at runtime, not stored)
     # =========================================================================

@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from ..config import config
 from ..models import ToolName
 from ..storage.chroma_store import ChromaStore
 from .base import Tool
@@ -19,14 +20,18 @@ class VectorSearchTool(Tool):
     description = "Search document text semantically. Use for context, explanations, qualitative info."
     
     def __init__(
-        self, 
-        chroma_store: ChromaStore | None = None, 
+        self,
+        chroma_store: ChromaStore | None = None,
         n_results: int = 5,
-        use_reranking: bool = True
+        use_reranking: bool | None = None
     ):
         self.chroma_store = chroma_store or ChromaStore()
         self.n_results = n_results
-        self.use_reranking = use_reranking
+        # Defaults to config.use_reranking so the documented setting is live;
+        # an explicit argument still wins (tests rely on forcing it off).
+        self.use_reranking = (
+            config.use_reranking if use_reranking is None else use_reranking
+        )
         self._reranker = None
         self._reranker_init_failed = False  # Track initialization failure separately
     

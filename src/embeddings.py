@@ -65,7 +65,7 @@ class OpenRouterEmbeddings(EmbeddingProvider):
             raise ValueError("OPENROUTER_API_KEY is required for OpenRouter embeddings")
         
         # Resolve model name
-        model = model or os.getenv("EMBEDDING_MODEL") or DEFAULT_OPENROUTER_MODEL
+        model = model or config.embedding_model or DEFAULT_OPENROUTER_MODEL
         if model in OPENROUTER_EMBEDDING_MODELS:
             self.model = OPENROUTER_EMBEDDING_MODELS[model]
         else:

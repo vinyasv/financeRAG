@@ -4,9 +4,11 @@ import os
 import threading
 from pathlib import Path
 
-from ..common.ids import chunk_id
 from ..config import config
 from ..models import TextChunk
+
+# Chroma enforces a maximum batch size per add(); stay comfortably under it.
+MAX_ADD_BATCH = 4000
 
 
 class ChromaStore:
@@ -41,25 +43,29 @@ class ChromaStore:
         
         Thread-safe using double-checked locking pattern.
         """
-        if self._client is None:
+        # Guard on _collection, not _client: _client used to be published
+        # BEFORE the collection was built, so a second thread could pass the
+        # fast-path check and use a still-None _collection.
+        if self._collection is None:
             with self._init_lock:
                 # Double-check after acquiring lock
-                if self._client is None:
+                if self._collection is None:
                     import chromadb
                     from chromadb.config import Settings
-                    
+
                     # Create persist directory if needed
                     self.persist_path.mkdir(parents=True, exist_ok=True)
-                    
-                    # Initialize client with persistence
-                    self._client = chromadb.PersistentClient(
+
+                    # Initialize client with persistence. Assigned to a local
+                    # first so a partially-constructed store is never visible.
+                    client = chromadb.PersistentClient(
                         path=str(self.persist_path),
                         settings=Settings(anonymized_telemetry=False)
                     )
-                    
+
                     # Get or create collection with embedding function
                     self._embedding_function = self._get_embedding_function()
-                    self._collection = self._client.get_or_create_collection(
+                    collection = client.get_or_create_collection(
                         name=self.collection_name,
                         embedding_function=self._embedding_function,
                         metadata={
@@ -69,7 +75,12 @@ class ChromaStore:
                             "hnsw:search_ef": 100,        # Much higher search depth for large KB
                         }
                     )
-    
+
+                    # Publish both together, collection last: it is the flag
+                    # the fast path above reads.
+                    self._client = client
+                    self._collection = collection
+
     def _get_embedding_function(self):
         """Get the embedding function based on config."""
         from ..embeddings import ChromaEmbeddingFunction, get_embedding_provider
@@ -116,11 +127,16 @@ class ChromaStore:
             for chunk in chunks
         ]
         
-        self._collection.add(
-            ids=ids,
-            documents=documents,
-            metadatas=metadatas
-        )
+        # Chroma rejects a single add() above its max batch size (~5.4k), so a
+        # large spreadsheet -- 100 rows per chunk over a 600k-row sheet -- would
+        # fail the whole ingest. Write in slices instead.
+        for start in range(0, len(ids), MAX_ADD_BATCH):
+            end = start + MAX_ADD_BATCH
+            self._collection.add(
+                ids=ids[start:end],
+                documents=documents[start:end],
+                metadatas=metadatas[start:end]
+            )
     
     def delete_document_chunks(self, document_id: str) -> None:
         """Delete all chunks for a document."""

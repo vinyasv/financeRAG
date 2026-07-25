@@ -6,27 +6,36 @@ from abc import ABC, abstractmethod
 # Ensure .env is loaded
 from .config import config as _config  # noqa: F401
 
-# OpenRouter popular models
+# OpenRouter popular models.
+#
+# Verified against https://openrouter.ai/api/v1/models. Six of the previous
+# aliases (claude-sonnet, claude-opus, gemini-flash, gemini-pro, llama-405b,
+# free) pointed at model ids OpenRouter no longer serves, so `-m claude-sonnet`
+# failed outright rather than merely being dated. Re-check these against the
+# live model list before assuming an alias still resolves.
 OPENROUTER_MODELS = {
     # Fast & cheap
-    "gemini-flash": "google/gemini-2.0-flash-001",
+    "gemini-flash": "google/gemini-3.5-flash",
+    "gpt-5-mini": "openai/gpt-5-mini",
     "gpt-4o-mini": "openai/gpt-4o-mini",
-    "claude-haiku": "anthropic/claude-3-haiku",
+    "claude-haiku": "anthropic/claude-haiku-4.5",
     "llama-8b": "meta-llama/llama-3.1-8b-instruct",
-    
+
     # Balanced
+    "claude-sonnet": "anthropic/claude-sonnet-5",
+    "claude-fable": "anthropic/claude-fable-5",
+    "gpt-5": "openai/gpt-5.2",
     "gpt-4o": "openai/gpt-4o",
-    "claude-sonnet": "anthropic/claude-3.5-sonnet",
-    "gemini-pro": "google/gemini-pro-1.5",
-    "llama-70b": "meta-llama/llama-3.1-70b-instruct",
-    
+    "gemini-pro": "google/gemini-3.1-pro-preview",
+    "llama-70b": "meta-llama/llama-3.3-70b-instruct",
+
     # Best quality
-    "claude-opus": "anthropic/claude-3-opus",
-    "gpt-4-turbo": "openai/gpt-4-turbo",
-    "llama-405b": "meta-llama/llama-3.1-405b-instruct",
-    
+    "claude-opus": "anthropic/claude-opus-5",
+    "claude-opus-fast": "anthropic/claude-opus-5-fast",
+    "gpt-5-pro": "openai/gpt-5-pro",
+
     # Free (with rate limits)
-    "free": "meta-llama/llama-3.1-8b-instruct:free",
+    "free": "openai/gpt-oss-20b:free",
 }
 
 

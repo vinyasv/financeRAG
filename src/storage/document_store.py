@@ -4,7 +4,6 @@ import json
 import logging
 import shutil
 from pathlib import Path
-from typing import Any
 
 from ..config import config
 from ..models import Document
@@ -53,8 +52,9 @@ def secure_path_join(base_path: Path, untrusted_path: str) -> Path:
     full_path = (base_path / safe_name).resolve()
     base_resolved = base_path.resolve()
     
-    # Verify the result is still within base_path
-    if not str(full_path).startswith(str(base_resolved)):
+    # Verify the result is still within base_path. `is_relative_to` rather than
+    # a string prefix: startswith("/data") also accepts "/database".
+    if not full_path.is_relative_to(base_resolved):
         logger.warning(f"Path traversal attempt detected: {untrusted_path}")
         raise PathSecurityError(f"Path traversal detected: {untrusted_path}")
     
@@ -194,6 +194,22 @@ class DocumentStore:
         
         return "\n".join(section_lines) if section_lines else None
     
+    def delete_document(self, doc_id: str) -> bool:
+        """Remove a document's metadata and extracted text. Returns True if found."""
+        if not validate_document_id(doc_id):
+            raise PathSecurityError(f"Invalid document ID: {doc_id}")
+
+        found = False
+        for path in (self.metadata_path / f"{doc_id}.json", self.content_path / f"{doc_id}.txt"):
+            if path.exists():
+                try:
+                    path.unlink()
+                    found = True
+                except OSError as exc:
+                    logger.error(f"Failed to delete {path}: {exc}")
+                    raise
+        return found
+
     def list_documents(self) -> list[Document]:
         """List all documents."""
         documents = []

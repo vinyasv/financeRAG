@@ -25,7 +25,7 @@ def test_pdf_table_fallback_distinguishes_empty_from_failure(monkeypatch):
     agent.vlm_extractor = SimpleNamespace(extract_tables_from_pdf=AsyncMock(return_value=[]))
     agent.docling_extractor = SimpleNamespace(extract_tables_from_pdf=AsyncMock(return_value=["docling"]))
 
-    result = asyncio.run(agent._extract_pdf_tables(object(), MagicMock(name="report.pdf"), "doc"))
+    result = asyncio.run(agent._extract_pdf_tables(MagicMock(name="report.pdf"), "doc"))
 
     assert result == ["docling"]
     agent.docling_extractor.extract_tables_from_pdf.assert_awaited_once()
@@ -33,7 +33,7 @@ def test_pdf_table_fallback_distinguishes_empty_from_failure(monkeypatch):
     agent.vlm_extractor.extract_tables_from_pdf = AsyncMock(side_effect=ExtractionFailed("boom"))
     agent.docling_extractor.extract_tables_from_pdf = AsyncMock(return_value=[])
 
-    result = asyncio.run(agent._extract_pdf_tables(object(), MagicMock(name="report.pdf"), "doc"))
+    result = asyncio.run(agent._extract_pdf_tables(MagicMock(name="report.pdf"), "doc"))
 
     assert result == []
     assert not hasattr(agent, "table_extractor")

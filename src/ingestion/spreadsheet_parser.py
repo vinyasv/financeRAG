@@ -8,7 +8,6 @@ from typing import Any
 
 import pandas as pd
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -104,6 +103,31 @@ class SpreadsheetParser:
             }
         )
 
+    @staticmethod
+    def _preview_csv(file_path: Path, rows: int = 10) -> pd.DataFrame:
+        """Read the first rows of a CSV into a ragged-tolerant DataFrame."""
+        import csv
+
+        for encoding in ("utf-8", "latin-1"):
+            try:
+                with open(file_path, newline="", encoding=encoding) as handle:
+                    sample = [
+                        row for _, row in zip(range(rows), csv.reader(handle))
+                    ]
+                break
+            except UnicodeDecodeError:
+                continue
+        else:  # pragma: no cover - both encodings failed
+            return pd.DataFrame()
+
+        if not sample:
+            return pd.DataFrame()
+
+        width = max(len(row) for row in sample)
+        padded = [row + [None] * (width - len(row)) for row in sample]
+        # Empty strings are "not populated" for the purposes of the heuristic.
+        return pd.DataFrame(padded).replace("", None)
+
     def _detect_header_row(self, preview: pd.DataFrame) -> int:
         """Infer a header row when workbooks have title rows above headers."""
         if preview.empty:
@@ -123,7 +147,13 @@ class SpreadsheetParser:
 
         first_idx, first_non_null, _ = row_scores[0]
         for idx, non_null, score in row_scores[1:4]:
-            if first_idx == 0 and first_non_null <= 2 and non_null >= 2 and score >= non_null:
+            # A title row is one with STRICTLY FEWER populated cells than the
+            # real header below it. The old `first_non_null <= 2` test keyed off
+            # an absolute width instead, so any 2-column sheet had its genuine
+            # header treated as a title: the first data row was promoted to the
+            # header, and a short sheet then came back empty and was dropped
+            # entirely by _parse_excel's `if df.empty: continue`.
+            if first_idx == 0 and first_non_null < non_null and score >= non_null:
                 return idx
 
         return 0
@@ -131,10 +161,22 @@ class SpreadsheetParser:
     def _parse_csv(self, file_path: Path) -> ParsedSpreadsheet:
         """Parse CSV file as single sheet."""
         # Try to detect encoding
-        try:
-            df = pd.read_csv(file_path, encoding='utf-8')
-        except UnicodeDecodeError:
-            df = pd.read_csv(file_path, encoding='latin-1')
+        def _read(**kwargs) -> pd.DataFrame:
+            try:
+                return pd.read_csv(file_path, encoding='utf-8', **kwargs)
+            except UnicodeDecodeError:
+                return pd.read_csv(file_path, encoding='latin-1', **kwargs)
+
+        # Same title-row inference as the Excel path. CSVs exported from
+        # financial systems carry title rows just as often as workbooks do, but
+        # this path used to take row 0 as the header unconditionally.
+        #
+        # The preview is read with the csv module rather than pandas: a title
+        # row is by definition narrower than the header below it, and pandas'
+        # C tokenizer fixes the field count from the FIRST line and then raises
+        # "Expected 1 fields in line 2, saw 3" on exactly the ragged shape this
+        # inference exists to detect.
+        df = _read(header=self._detect_header_row(self._preview_csv(file_path)))
         
         # Use filename (without extension) as sheet name
         sheet_name = file_path.stem

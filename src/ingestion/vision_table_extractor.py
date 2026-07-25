@@ -10,8 +10,8 @@ Speed optimizations applied:
 - Optimized batch sizes
 """
 
-import hashlib
 import asyncio
+import hashlib
 import logging
 import multiprocessing
 from pathlib import Path

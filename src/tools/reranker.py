@@ -3,6 +3,7 @@
 import tempfile
 from pathlib import Path
 
+from ..config import config
 from ..models import TextChunk
 
 
@@ -14,16 +15,17 @@ class Reranker:
     distilled T5 models. Adds ~10-50ms latency for reranking.
     """
     
-    def __init__(self, model_name: str = "rank-T5-flan"):
+    def __init__(self, model_name: str | None = None):
         """
         Initialize the reranker.
-        
+
         Args:
-            model_name: FlashRank model name. Options:
+            model_name: FlashRank model name. Defaults to ``config.reranker_model``.
+                Options:
                 - "rank-T5-flan" (default, fastest)
                 - "rank_zephyr_7b_v1_full" (more accurate, slower)
         """
-        self.model_name = model_name
+        self.model_name = model_name or config.reranker_model
         self._ranker = None
     
     def _ensure_model(self):

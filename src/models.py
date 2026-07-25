@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -232,13 +233,32 @@ class CalculationTranscript(BaseModel):
     
     @staticmethod
     def _format_number(value: float) -> str:
-        """Format number with appropriate units (B/M/K)."""
+        """
+        Format number with a magnitude suffix (B/M/K).
+
+        Deliberately unit-agnostic: a transcript carries no unit metadata, so the
+        operands may be dollars, share counts, headcount, basis points or ratios.
+        Prefixing a currency symbol here would assert a unit we do not know, and
+        this string is fed straight into the synthesis prompt.
+        """
+        # inf/nan reach here through float overflow in the calculator
+        # (Mult and Pow are permitted, and the div-by-zero guard does not catch
+        # 1e308 * 10). "infB" in an audit trail is worse than useless.
+        if not math.isfinite(value):
+            return "undefined (nan)" if math.isnan(value) else (
+                "undefined (+inf)" if value > 0 else "undefined (-inf)"
+            )
+
+        # Normalize signed zero so -0.0 does not render as "-0.00".
+        if value == 0:
+            value = 0.0
+
         abs_val = abs(value)
         if abs_val >= 1_000_000_000:
-            return f"${value / 1_000_000_000:,.2f}B"
+            return f"{value / 1_000_000_000:,.2f}B"
         elif abs_val >= 1_000_000:
-            return f"${value / 1_000_000:,.2f}M"
+            return f"{value / 1_000_000:,.2f}M"
         elif abs_val >= 1_000:
-            return f"${value / 1_000:,.2f}K"
+            return f"{value / 1_000:,.2f}K"
         else:
             return f"{value:,.2f}"

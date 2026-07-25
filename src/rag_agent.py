@@ -45,9 +45,6 @@ class RAGAgent:
     # Supported file types for ingestion
     SUPPORTED_EXTENSIONS = {'.pdf', '.xlsx', '.xls', '.csv'}
     
-    # Number of sample rows to include in vector search chunk for spreadsheets
-    SPREADSHEET_SAMPLE_ROWS = 25
-    
     def __init__(self, llm_client: Any = None):
         """
         Initialize the RAG agent.
@@ -142,7 +139,7 @@ class RAGAgent:
             return False
         if self.chroma_store.count(document_id=doc_id) < 1:
             return False
-        if requires_table and not self.sqlite_store.list_tables(document_id=doc_id):
+        if requires_table and not self.sqlite_store.list_native_tables(document_id=doc_id):
             return False
         return True
 
@@ -194,7 +191,7 @@ class RAGAgent:
         if chunks:
             self.chroma_store.add_chunks(chunks)
 
-    async def _extract_pdf_tables(self, parsed, pdf_path: Path, doc_id: str) -> list[ExtractedTable]:
+    async def _extract_pdf_tables(self, pdf_path: Path, doc_id: str) -> list[ExtractedTable]:
         """Extract PDF tables using VLM first, then Docling local fallback."""
         tables: list[ExtractedTable] = []
 
@@ -411,7 +408,7 @@ class RAGAgent:
             return document
 
         await self._learn_company_safe(pdf_path.name)
-        tables = await self._extract_pdf_tables(parsed, pdf_path, doc_id)
+        tables = await self._extract_pdf_tables(pdf_path, doc_id)
         await self._process_pdf_tables(tables, pdf_path.name)
         chunks = self.chunker.chunk_document(parsed, doc_id)
         self._index_chunk_batch(chunks)
@@ -467,7 +464,16 @@ class RAGAgent:
                 documents.append(document)
                 continue
 
-            table_name = sanitize_table_name(sheet.sheet_name, numeric_prefix="sheet_")
+            # Scope the native table name by document. `spreadsheet_tables.
+            # table_name` is the PRIMARY KEY and save_spreadsheet_native issues
+            # DROP TABLE IF EXISTS, so an unscoped name meant two workbooks that
+            # both contain a default-named "Sheet1" silently destroyed each
+            # other's rows on every ingest cycle. The PDF path has always
+            # avoided this via _make_unique_table_name; spreadsheets now do too.
+            table_name = self.sqlite_store.make_native_table_name(
+                sanitize_table_name(sheet.sheet_name, numeric_prefix="sheet_"),
+                doc_id,
+            )
             await self._save_spreadsheet_table(
                 doc_id=doc_id,
                 source_document=file_path.name,
@@ -498,9 +504,10 @@ class RAGAgent:
         if not self.llm_client:
             raise RuntimeError("Querying requires an LLM client. Configure OPENROUTER_API_KEY.")
 
-        tables = self.sqlite_store.list_tables()
-        table_names = [t.table_name for t in tables]
-        
+        # Native tables are the only names the planner can actually query.
+        tables = self.sqlite_store.list_native_tables()
+        table_names = [t["table_name"] for t in tables]
+
         documents = self.document_store.list_documents()
         doc_ids = [d.id for d in documents]
         
@@ -543,10 +550,33 @@ class RAGAgent:
         """List all ingested documents."""
         return self.document_store.list_documents()
     
+    def delete_document(self, doc_id: str) -> bool:
+        """
+        Remove a document from every store: SQL tables and metadata, vector
+        chunks, and the extracted-text/metadata files.
+
+        Cluster assignments are pruned too, otherwise the deleted table names
+        keep being offered to the SQL prompt.
+
+        Returns:
+            True if the document existed in any store.
+        """
+        dropped_tables = self.sqlite_store.delete_document(doc_id)
+        self.chroma_store.delete_document_chunks(doc_id)
+        removed_files = self.document_store.delete_document(doc_id)
+
+        for table_name in dropped_tables:
+            try:
+                self.schema_cluster_manager.remove_table(table_name)
+            except Exception as exc:
+                logger.warning(f"Could not unassign {table_name} from its cluster: {exc}")
+
+        return bool(dropped_tables) or removed_files
+
     def get_stats(self) -> dict[str, Any]:
         """Get statistics about the knowledge base."""
         docs = self.document_store.list_documents()
-        tables = self.sqlite_store.list_tables()
+        tables = self.sqlite_store.list_native_tables()
         chunk_count = self.chroma_store.count()
         
         # Separate PDFs from spreadsheets

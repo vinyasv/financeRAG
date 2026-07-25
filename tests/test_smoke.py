@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-
 # Distinctive substring inside src/agent/synthesizer.py SYNTHESIS_PROMPT that
 # does NOT appear in the planner prompt. We rely on this to route the mock
 # response to synthesis vs planning. ("SENIOR FINANCIAL ANALYST" is shared by
